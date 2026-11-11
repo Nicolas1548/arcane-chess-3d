@@ -64,7 +64,7 @@ class MultiplayerService {
     if (savedId) {
       this.localPlayerId = savedId;
     } else {
-      this.localPlayerId = 'player_' + Math.random().toString(36).substring(2, 10);
+      this.localPlayerId = 'player_' + this.generateSecureToken(22);
       if (hasSession) {
         sessionStorage.setItem('arcane_player_uid', this.localPlayerId);
       }
@@ -132,11 +132,13 @@ class MultiplayerService {
 
   public generateRoomCode(): string {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    let code = 'ARC-';
-    for (let i = 0; i < 4; i++) {
-      code += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return code;
+    return 'ARC-' + this.generateSecureToken(12, chars);
+  }
+
+  private generateSecureToken(length: number, alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'): string {
+    const values = new Uint32Array(length);
+    globalThis.crypto.getRandomValues(values);
+    return Array.from(values, (value) => alphabet[value % alphabet.length]).join('');
   }
 
   public async createRoom(playerName: string, initialFen: string): Promise<RoomData> {
@@ -310,13 +312,38 @@ class MultiplayerService {
     }
   }
 
-  public async sendChatMessage(roomId: string, senderName: string, text: string) {
+  public async sendChatMessage(roomId: string, _senderName: string, text: string) {
     const cleanText = text.trim().slice(0, 300);
     if (!cleanText) return;
 
+    const senderId = this.getPlayerId();
+    let room: RoomData | null = null;
+    if (this.db) {
+      const snap = await getDoc(doc(this.db, 'rooms', roomId));
+      if (!snap.exists()) {
+        throw new Error('Sala não encontrada.');
+      }
+      room = snap.data() as RoomData;
+    } else {
+      const rawRoom = localStorage.getItem(LOCAL_ROOMS_PREFIX + roomId);
+      if (!rawRoom) {
+        throw new Error('Sala não encontrada.');
+      }
+      room = JSON.parse(rawRoom) as RoomData;
+    }
+
+    const senderName = room.whiteId === senderId
+      ? room.whiteName
+      : room.blackId === senderId
+        ? room.blackName || 'Cavaleiro Negro'
+        : null;
+    if (!senderName) {
+      throw new Error('Apenas os duelistas podem enviar mensagens nesta sala.');
+    }
+
     const msg: Omit<ChatMessage, 'id'> = {
-      senderId: this.getPlayerId(),
-      senderName: senderName.trim().slice(0, 40) || 'Duelista',
+      senderId,
+      senderName,
       text: cleanText,
       createdAt: Date.now(),
     };
