@@ -162,12 +162,44 @@ service cloud.firestore {
     // Check if one of the seated players (White or Black) is updating the game state
     function isSeatedPlayerUpdatingGame() {
       return (
-          request.auth.uid == resource.data.whiteId ||
-          ('blackId' in resource.data && resource.data.blackId != null && request.auth.uid == resource.data.blackId)
+          resource.data.status == 'playing' &&
+          (
+            request.auth.uid == resource.data.whiteId ||
+            ('blackId' in resource.data && resource.data.blackId != null &&
+              request.auth.uid == resource.data.blackId)
+          )
         ) &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'fen', 'pgn', 'turn', 'status', 'lastMove', 'winner', 'updatedAt'
-        ]);
+        ]) &&
+        request.resource.data.updatedAt > resource.data.updatedAt &&
+        request.resource.data.fen != resource.data.fen &&
+        request.resource.data.pgn.size() > resource.data.pgn.size() &&
+        request.resource.data.lastMove != null &&
+        request.resource.data.turn != resource.data.turn &&
+        (
+          (resource.data.turn == 'w' && request.auth.uid == resource.data.whiteId) ||
+          (resource.data.turn == 'b' && request.auth.uid == resource.data.blackId)
+        ) &&
+        (
+          (request.resource.data.status == 'playing' && request.resource.data.winner == null) ||
+          (request.resource.data.status == 'finished' && request.resource.data.winner in ['w', 'b', 'draw'])
+        );
+    }
+
+    function isRoomMember(room) {
+      return isAuthenticated() &&
+        (request.auth.uid == room.data.whiteId ||
+          ('blackId' in room.data && room.data.blackId != null && request.auth.uid == room.data.blackId));
+    }
+
+    function isMessageAuthor(room) {
+      return request.resource.data.senderId == request.auth.uid &&
+        (
+          (request.auth.uid == room.data.whiteId && request.resource.data.senderName == room.data.whiteName) ||
+          ('blackId' in room.data && room.data.blackId == request.auth.uid &&
+            request.resource.data.senderName == room.data.blackName)
+        );
     }
 
     // ===============================================================
@@ -176,7 +208,12 @@ service cloud.firestore {
 
     match /rooms/{roomId} {
       // Authenticated users can read room state to join or spectate
-      allow read: if isAuthenticated();
+      allow read: if isAuthenticated() &&
+        (
+          isRoomMember(get(/databases/$(database)/documents/rooms/$(roomId))) ||
+          (resource.data.status == 'waiting' &&
+            (!('blackId' in resource.data) || resource.data.blackId == null))
+        );
 
       // Authenticated user can create a room as the White player
       allow create: if isAuthenticated() &&
@@ -197,13 +234,13 @@ service cloud.firestore {
       // Room chat messages subcollection
       match /messages/{messageId} {
         // Authenticated users in the room can read messages
-        allow read: if isAuthenticated();
+        allow read: if isRoomMember(get(/databases/$(database)/documents/rooms/$(roomId)));
 
         // Authenticated users can post messages to an existing room under their own UID
         allow create: if isAuthenticated() &&
-          exists(/databases/$(database)/documents/rooms/$(roomId)) &&
+          isRoomMember(get(/databases/$(database)/documents/rooms/$(roomId))) &&
           isValidMessage(request.resource.data) &&
-          isOwner(request.resource.data.senderId);
+          isMessageAuthor(get(/databases/$(database)/documents/rooms/$(roomId)));
 
         // Chat messages are immutable once sent
         allow update, delete: if false;
