@@ -10,6 +10,7 @@ import {
 import * as THREE from 'three';
 import { Square } from 'chess.js';
 import { useGameStore, CameraPreset } from '../../store/useGameStore';
+import { soundEngine } from '../../audio/soundEngine';
 import { Board3D } from './Board3D';
 import { MagicParticles3D } from './MagicParticles3D';
 import { getRusticTableWoodTexture } from '../../utils/proceduralTextures';
@@ -229,7 +230,11 @@ const SideAwareLightingRig: React.FC<{ children: (side: 'black' | 'white') => Re
 
   useFrame(() => {
     const z = camera.position.z;
-    // Hysteresis so the rig doesn't flicker when the camera is near the top-down position
+    // Hysteresis so the rig doesn't flicker when the camera is near the top-down position.
+    // If the camera is looking straight down (isTopDown), do NOT flip lights so the board never suddenly rotates shadows.
+    if (Math.abs(camera.position.x) < 0.2 && Math.abs(camera.position.z) < 0.2) {
+      return;
+    }
     let next = sideRef.current;
     if (z > 0.6) next = 'white';
     else if (z < -0.6) next = 'black';
@@ -245,6 +250,7 @@ const SideAwareLightingRig: React.FC<{ children: (side: 'black' | 'white') => Re
 };
 
 export const Scene3D: React.FC = () => {
+  const lastTapRef = useRef<number>(0);
   const {
     cameraPreset,
     is2DMode,
@@ -256,7 +262,22 @@ export const Scene3D: React.FC = () => {
     draggingSquare,
     arenaTheme,
     highQuality,
+    setCameraPreset,
   } = useGameStore();
+
+  const isTopDown = is2DMode || cameraPreset === 'top';
+
+  const handleDoubleTap = (e: React.TouchEvent | React.MouseEvent) => {
+    const now = Date.now();
+    if (now - lastTapRef.current < 320) {
+      // Double tap detected: reset camera preset to original orbital / default
+      soundEngine.triggerHaptic('light');
+      setCameraPreset(is2DMode ? 'top' : 'orbital');
+      lastTapRef.current = 0;
+    } else {
+      lastTapRef.current = now;
+    }
+  };
 
   const studioPalette = {
     citadel: {
@@ -286,7 +307,11 @@ export const Scene3D: React.FC = () => {
   }[arenaTheme];
 
   return (
-    <div className="w-full h-full relative touch-none">
+    <div
+      className="w-full h-full relative touch-none"
+      onClick={handleDoubleTap}
+      onTouchEnd={handleDoubleTap}
+    >
       <Canvas
         shadows={highQuality}
         dpr={highQuality ? [1, 2] : [1, 1.15]}
@@ -412,12 +437,12 @@ export const Scene3D: React.FC = () => {
         <OrbitControls
           makeDefault
           enabled={draggingSquare === null}
-          enableRotate={!is2DMode}
+          enableRotate={!isTopDown}
           enablePan={false}
           enableDamping
           dampingFactor={0.07}
-          minPolarAngle={is2DMode || cameraPreset === 'top' ? 0 : 0.15}
-          maxPolarAngle={is2DMode ? 0.01 : Math.PI / 2 - 0.06}
+          minPolarAngle={isTopDown ? 0 : 0.15}
+          maxPolarAngle={isTopDown ? 0.001 : Math.PI / 2 - 0.06}
           minDistance={5.5}
           maxDistance={28}
           target={[0, 0.15, 0]}

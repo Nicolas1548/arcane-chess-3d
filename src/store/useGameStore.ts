@@ -18,15 +18,20 @@ export interface CaptureEffect {
   square: Square;
   color: Color;
   piece: PieceSymbol;
+  attackerPiece?: PieceSymbol;
   timestamp: number;
 }
+
+export type MoveClassification = 'brilliant' | 'great' | 'best' | 'inaccuracy' | 'mistake' | 'blunder';
 
 export interface MoveRecord {
   moveNumber: number;
   white?: string;
   whitePly?: number;
+  whiteClass?: MoveClassification;
   black?: string;
   blackPly?: number;
+  blackClass?: MoveClassification;
 }
 
 export interface PlySnapshot {
@@ -36,6 +41,7 @@ export interface PlySnapshot {
   capturedWhite: PieceSymbol[];
   capturedBlack: PieceSymbol[];
   evalScore: number;
+  classification?: MoveClassification;
 }
 
 export interface AITelemetry {
@@ -147,6 +153,26 @@ function buildInitialSnapshot(fen = INITIAL_FEN): PlySnapshot {
 }
 
 /**
+ * Classifies a move using centipawn evaluation swing (Chess.com style)
+ */
+function classifyMoveDelta(
+  prevEval: number,
+  currEval: number,
+  isWhiteMove: boolean,
+  isCheckmate: boolean
+): MoveClassification {
+  if (isCheckmate) return 'brilliant';
+  // Delta in favor of the player who moved
+  const delta = isWhiteMove ? currEval - prevEval : prevEval - currEval;
+  if (delta >= 180) return 'brilliant';
+  if (delta >= 40) return 'great';
+  if (delta >= -35) return 'best';
+  if (delta >= -110) return 'inaccuracy';
+  if (delta >= -240) return 'mistake';
+  return 'blunder';
+}
+
+/**
  * Safely reconstructs full timeline from any starting FEN (standard, imported FEN, or tactical puzzle).
  */
 export function buildTimelineFromChess(chess: Chess): {
@@ -170,7 +196,9 @@ export function buildTimelineFromChess(chess: Chess): {
   verboseHistory.forEach((m, index) => {
     const ply = index + 1;
     sanList.push(m.san);
+    const prevEval = plySnapshots[plySnapshots.length - 1]?.evalScore ?? 0;
     replayChess.move({ from: m.from, to: m.to, promotion: m.promotion });
+    const currEval = evaluateBoard(replayChess);
 
     if (m.captured) {
       if (m.color === 'w') {
@@ -180,13 +208,21 @@ export function buildTimelineFromChess(chess: Chess): {
       }
     }
 
+    const classification = classifyMoveDelta(
+      prevEval,
+      currEval,
+      m.color === 'w',
+      replayChess.isCheckmate()
+    );
+
     plySnapshots.push({
       ply,
       fen: replayChess.fen(),
       lastMove: { from: m.from as Square, to: m.to as Square, san: m.san },
       capturedWhite: [...capturedWhite],
       capturedBlack: [...capturedBlack],
-      evalScore: evaluateBoard(replayChess),
+      evalScore: currEval,
+      classification,
     });
 
     if (index % 2 === 0) {
@@ -194,12 +230,14 @@ export function buildTimelineFromChess(chess: Chess): {
         moveNumber: Math.floor(index / 2) + 1,
         white: m.san,
         whitePly: ply,
+        whiteClass: classification,
       });
     } else {
       const current = moveHistory[moveHistory.length - 1];
       if (current) {
         current.black = m.san;
         current.blackPly = ply;
+        current.blackClass = classification;
       }
     }
   });
@@ -648,25 +686,30 @@ export const useGameStore = create<GameState>((set, get) => ({
       const isCastle = moveResult.flags.includes('k') || moveResult.flags.includes('q');
 
       if (moveResult.captured) {
-        soundEngine.playCapture();
+        soundEngine.playCapture(moveResult.piece);
+        soundEngine.triggerHaptic('medium');
         if (state.animationsEnabled) {
           const effect: CaptureEffect = {
             id: 'fx_' + Date.now() + '_' + Math.random(),
             square: to,
             color: moveResult.color === 'w' ? 'b' : 'w',
             piece: moveResult.captured,
+            attackerPiece: moveResult.piece,
             timestamp: Date.now(),
           };
           newEffects = [...state.captureEffects.slice(-4), effect];
         }
       } else {
         soundEngine.playMove(isCastle);
+        soundEngine.triggerHaptic('light');
       }
 
       if (isCheckmate) {
         soundEngine.playVictory();
+        soundEngine.triggerHaptic('heavy');
       } else if (inCheck) {
         soundEngine.playCheck();
+        soundEngine.triggerHaptic('warning');
       }
 
       const {
@@ -679,7 +722,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       } = buildTimelineFromChess(game);
       const evalScore = evaluateBoard(game);
 
-      const nextCameraPreset = state.is2DMode
+      const nextCameraPreset = (state.is2DMode || state.cameraPreset === 'top')
         ? 'top'
         : state.mode === 'local' && state.autoRotateCamera
         ? nextTurn === 'w'
@@ -830,6 +873,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   completePromotion: (piece: PieceSymbol) => {
     const pending = get().pendingPromotion;
     if (!pending) return;
+    soundEngine.playPromotion();
     get().executeMove(pending.from, pending.to, piece);
   },
 
@@ -1294,16 +1338,26 @@ export const useGameStore = create<GameState>((set, get) => ({
       const nextWhite = Math.max(0, state.whiteTime - 1);
       if (nextWhite === 0) {
         soundEngine.playVictory();
+        soundEngine.triggerHaptic('heavy');
         set({ whiteTime: 0, isCheckmate: true, winner: 'b' });
       } else {
+        if (nextWhite <= 30 && nextWhite % 2 === 0) {
+          soundEngine.playTensionPulse();
+          soundEngine.triggerHaptic('light');
+        }
         set({ whiteTime: nextWhite });
       }
     } else {
       const nextBlack = Math.max(0, state.blackTime - 1);
       if (nextBlack === 0) {
         soundEngine.playVictory();
+        soundEngine.triggerHaptic('heavy');
         set({ blackTime: 0, isCheckmate: true, winner: 'w' });
       } else {
+        if (nextBlack <= 30 && nextBlack % 2 === 0) {
+          soundEngine.playTensionPulse();
+          soundEngine.triggerHaptic('light');
+        }
         set({ blackTime: nextBlack });
       }
     }

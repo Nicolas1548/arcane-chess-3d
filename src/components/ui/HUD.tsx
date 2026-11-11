@@ -66,6 +66,18 @@ const PIECE_GLYPHS: Record<PieceSymbol, string> = {
   k: '♚',
 };
 
+const CLASSIFICATION_BADGES: Record<
+  string,
+  { symbol: string; label: string; bg: string; text: string }
+> = {
+  brilliant: { symbol: '!!', label: 'Brilhante', bg: 'bg-cyan-500/20 border-cyan-500/40', text: 'text-cyan-300' },
+  great: { symbol: '!', label: 'Ótimo', bg: 'bg-blue-500/20 border-blue-500/40', text: 'text-blue-300' },
+  best: { symbol: '★', label: 'Melhor', bg: 'bg-emerald-500/20 border-emerald-500/40', text: 'text-emerald-300' },
+  inaccuracy: { symbol: '?!', label: 'Imprecisão', bg: 'bg-amber-500/20 border-amber-500/40', text: 'text-amber-300' },
+  mistake: { symbol: '?', label: 'Erro', bg: 'bg-orange-500/20 border-orange-500/40', text: 'text-orange-400' },
+  blunder: { symbol: '??', label: 'Erro Crasso', bg: 'bg-red-500/25 border-red-500/50', text: 'text-red-400 font-bold' },
+};
+
 function formatClock(seconds: number, unlimited = false): string {
   if (unlimited) return '∞';
   const m = Math.floor(seconds / 60);
@@ -803,6 +815,43 @@ export const HUD: React.FC = () => {
                     </div>
                   </div>
                 )}
+
+                {/* Advantage Swing Timeline Sparkline */}
+                {plySnapshots.length > 2 && (
+                  <div className="bg-stone-900/90 border border-stone-800 rounded-xl p-2 space-y-1">
+                    <div className="flex items-center justify-between text-[10px] text-stone-400">
+                      <span>Oscilação da Partida</span>
+                      <span className="font-mono text-amber-300">{evalPawnsFormatted}</span>
+                    </div>
+                    <div className="h-9 w-full flex items-end gap-[2px] bg-stone-950/80 rounded p-1">
+                      {plySnapshots.map((snap) => {
+                        // Clamp evaluation between -800 and +800 centipawns
+                        const normalized = Math.max(-800, Math.min(800, snap.evalScore));
+                        const pct = ((normalized + 800) / 1600) * 100;
+                        const isSelected = activePly === snap.ply;
+                        return (
+                          <button
+                            key={snap.ply}
+                            onClick={() => jumpToPly(snap.ply === maxPly ? null : snap.ply)}
+                            title={`Lance ${snap.ply}: ${snap.evalScore > 0 ? '+' : ''}${(snap.evalScore / 100).toFixed(1)}`}
+                            className="flex-1 h-full flex flex-col justify-end group/bar relative"
+                          >
+                            <div
+                              style={{ height: `${Math.max(10, pct)}%` }}
+                              className={`w-full rounded-t-sm transition-all ${
+                                isSelected
+                                  ? 'bg-amber-400 shadow-[0_0_6px_#fbbf24]'
+                                  : snap.evalScore >= 0
+                                  ? 'bg-stone-300 group-hover/bar:bg-amber-300'
+                                  : 'bg-stone-600 group-hover/bar:bg-amber-500'
+                              }`}
+                            />
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="flex-1 overflow-y-auto my-2 pr-1">
@@ -817,35 +866,55 @@ export const HUD: React.FC = () => {
                         <tr key={row.moveNumber}>
                           <td className="py-1 pl-1 text-stone-500 w-8">{row.moveNumber}.</td>
                           <td className="py-1">
-                            <button
-                              onClick={() =>
-                                row.whitePly &&
-                                jumpToPly(row.whitePly === maxPly ? null : row.whitePly)
-                              }
-                              className={`px-2 py-0.5 rounded transition ${
-                                activePly === row.whitePly
-                                  ? 'bg-amber-600 text-stone-950 font-bold'
-                                  : 'text-stone-200 hover:bg-stone-800'
-                              }`}
-                            >
-                              {row.white}
-                            </button>
+                            <div className="flex items-center gap-1">
+                              <button
+                                onClick={() =>
+                                  row.whitePly &&
+                                  jumpToPly(row.whitePly === maxPly ? null : row.whitePly)
+                                }
+                                className={`px-2 py-0.5 rounded transition ${
+                                  activePly === row.whitePly
+                                    ? 'bg-amber-600 text-stone-950 font-bold'
+                                    : 'text-stone-200 hover:bg-stone-800'
+                                }`}
+                              >
+                                {row.white}
+                              </button>
+                              {row.whiteClass && CLASSIFICATION_BADGES[row.whiteClass] && (
+                                <span
+                                  title={CLASSIFICATION_BADGES[row.whiteClass].label}
+                                  className={`text-[9px] font-bold px-1 py-0.2 rounded border ${CLASSIFICATION_BADGES[row.whiteClass].bg} ${CLASSIFICATION_BADGES[row.whiteClass].text}`}
+                                >
+                                  {CLASSIFICATION_BADGES[row.whiteClass].symbol}
+                                </span>
+                              )}
+                            </div>
                           </td>
                           <td className="py-1">
                             {row.black ? (
-                              <button
-                                onClick={() =>
-                                  row.blackPly &&
-                                  jumpToPly(row.blackPly === maxPly ? null : row.blackPly)
-                                }
-                                className={`px-2 py-0.5 rounded transition ${
-                                  activePly === row.blackPly
-                                    ? 'bg-amber-600 text-stone-950 font-bold'
-                                    : 'text-stone-400 hover:bg-stone-800'
-                                }`}
-                              >
-                                {row.black}
-                              </button>
+                              <div className="flex items-center gap-1">
+                                <button
+                                  onClick={() =>
+                                    row.blackPly &&
+                                    jumpToPly(row.blackPly === maxPly ? null : row.blackPly)
+                                  }
+                                  className={`px-2 py-0.5 rounded transition ${
+                                    activePly === row.blackPly
+                                      ? 'bg-amber-600 text-stone-950 font-bold'
+                                      : 'text-stone-400 hover:bg-stone-800'
+                                  }`}
+                                >
+                                  {row.black}
+                                </button>
+                                {row.blackClass && CLASSIFICATION_BADGES[row.blackClass] && (
+                                  <span
+                                    title={CLASSIFICATION_BADGES[row.blackClass].label}
+                                    className={`text-[9px] font-bold px-1 py-0.2 rounded border ${CLASSIFICATION_BADGES[row.blackClass].bg} ${CLASSIFICATION_BADGES[row.blackClass].text}`}
+                                  >
+                                    {CLASSIFICATION_BADGES[row.blackClass].symbol}
+                                  </span>
+                                )}
+                              </div>
                             ) : (
                               <span className="text-stone-700 px-2">...</span>
                             )}
@@ -1407,32 +1476,90 @@ export const HUD: React.FC = () => {
         </div>
       )}
 
-      {/* PAWN PROMOTION MODAL */}
+      {/* PAWN PROMOTION MODAL: THE CONSECRATION OF THE CHAMPION */}
       {pendingPromotion && (
-        <div className="pointer-events-auto fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-stone-950 border border-amber-600/50 rounded-2xl p-6 max-w-sm w-full shadow-2xl text-center space-y-4">
-            <Crown className="w-8 h-8 text-amber-500 mx-auto" />
-            <h3 className="text-base font-bold text-stone-100">Promoção Real do Peão</h3>
-            <div className="grid grid-cols-2 gap-2">
+        <div className="pointer-events-auto fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center z-50 p-4 animate-in fade-in duration-300">
+          <div className="bg-gradient-to-b from-stone-900 via-stone-950 to-stone-950 border-2 border-amber-500/70 rounded-3xl p-6 sm:p-8 max-w-lg w-full shadow-[0_0_50px_rgba(245,158,11,0.25)] text-center space-y-6 relative overflow-hidden">
+            {/* Golden Radiant Backlight */}
+            <div className="absolute -top-24 left-1/2 -translate-x-1/2 w-72 h-72 bg-amber-500/15 rounded-full blur-3xl pointer-events-none" />
+
+            <div className="space-y-1 relative">
+              <div className="w-14 h-14 mx-auto rounded-2xl bg-amber-500/15 border border-amber-500/40 flex items-center justify-center shadow-inner">
+                <Crown className="w-8 h-8 text-amber-400 drop-shadow-[0_0_12px_rgba(251,191,36,0.6)]" />
+              </div>
+              <h3 className="text-xl sm:text-2xl font-black text-amber-200 tracking-wide font-serif pt-2">
+                Consagração Heroica
+              </h3>
+              <p className="text-xs text-stone-400 max-w-xs mx-auto">
+                O peão atingiu o posto de glória suprema. Escolha o novo senhor que liderará o reino:
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 relative">
               {(
                 [
-                  ['q', 'Rainha (♛)'],
-                  ['r', 'Torre (♜)'],
-                  ['b', 'Bispo (♝)'],
-                  ['n', 'Cavalo (♞)'],
-                ] as [PieceSymbol, string][]
-              ).map(([piece, label]) => (
+                  {
+                    piece: 'q' as PieceSymbol,
+                    title: 'Dama Real',
+                    symbol: '♛',
+                    desc: 'Domínio absoluto das fileiras e diagonais',
+                    power: 'Poder Máximo',
+                    glow: 'from-amber-600/30 to-amber-950/40 border-amber-500/50 hover:border-amber-400',
+                  },
+                  {
+                    piece: 'n' as PieceSymbol,
+                    title: 'Paladino',
+                    symbol: '♞',
+                    desc: 'Golpe tático capaz de saltar sobre oponentes',
+                    power: 'Garfos Mortais',
+                    glow: 'from-emerald-600/25 to-stone-950/40 border-emerald-500/40 hover:border-emerald-400',
+                  },
+                  {
+                    piece: 'r' as PieceSymbol,
+                    title: 'Bastião',
+                    symbol: '♜',
+                    desc: 'Força bruta e controle total de colunas abertas',
+                    power: 'Fortaleza',
+                    glow: 'from-sky-600/25 to-stone-950/40 border-sky-500/40 hover:border-sky-400',
+                  },
+                  {
+                    piece: 'b' as PieceSymbol,
+                    title: 'Prelado',
+                    symbol: '♝',
+                    desc: 'Visão veloz através dos corredores do salão',
+                    power: 'Sniper Veloz',
+                    glow: 'from-purple-600/25 to-stone-950/40 border-purple-500/40 hover:border-purple-400',
+                  },
+                ]
+              ).map((card) => (
                 <button
-                  key={piece}
-                  onClick={() => completePromotion(piece)}
-                  className="py-2.5 px-4 rounded-xl bg-stone-900 hover:bg-amber-600 hover:text-stone-950 border border-stone-700 text-stone-100 font-bold text-xs transition"
+                  key={card.piece}
+                  onClick={() => completePromotion(card.piece)}
+                  className={`group relative p-4 rounded-2xl bg-gradient-to-b ${card.glow} border text-stone-100 flex flex-col items-center justify-between gap-2.5 transition-all duration-200 hover:-translate-y-1 hover:shadow-[0_8px_24px_rgba(245,158,11,0.2)] active:scale-95`}
                 >
-                  {label}
+                  <span className="text-4xl sm:text-5xl drop-shadow-[0_4px_8px_rgba(0,0,0,0.8)] group-hover:scale-110 transition-transform duration-200">
+                    {card.symbol}
+                  </span>
+                  <div>
+                    <h4 className="font-bold text-sm text-amber-100 group-hover:text-amber-300 transition-colors">
+                      {card.title}
+                    </h4>
+                    <span className="inline-block text-[10px] uppercase font-semibold tracking-wider text-amber-400/80 mt-0.5">
+                      {card.power}
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-stone-400 leading-tight hidden sm:block">
+                    {card.desc}
+                  </p>
                 </button>
               ))}
             </div>
-            <button onClick={cancelPromotion} className="text-xs text-stone-400 hover:text-white">
-              Cancelar
+
+            <button
+              onClick={cancelPromotion}
+              className="text-xs text-stone-400 hover:text-white transition-colors underline underline-offset-4 decoration-stone-600 hover:decoration-stone-300"
+            >
+              Cancelar Movimento
             </button>
           </div>
         </div>

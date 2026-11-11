@@ -1,3 +1,5 @@
+import { PieceSymbol } from 'chess.js';
+
 // Realistic Acoustic Wood/Marble & Medieval Arcane Web Audio Engine
 class SoundEngine {
   private ctx: AudioContext | null = null;
@@ -205,16 +207,81 @@ class SoundEngine {
   }
 
   /**
-   * Heavy Impact + Stone/Marble Shatter Harmonics on Capture
+   * Heavy Impact + Stone/Marble Shatter Harmonics on Capture with Attacker Weapon Profiles
    */
-  public playCapture() {
+  public playCapture(attackerPiece: PieceSymbol = 'p') {
     if (!this.enabled) return;
     this.initContext();
     if (!this.ctx) return;
 
     const now = this.ctx.currentTime;
 
-    // 1. Sub-bass table impact thud
+    // 1. Attacker-specific weapon strike transient
+    if (attackerPiece === 'n') {
+      // Cavalry Lances & Horseshoe War Impact: double rapid gallop thump + metal ring
+      [0, 0.08].forEach((offset, idx) => {
+        if (!this.ctx) return;
+        const t = now + offset;
+        const osc = this.ctx.createOscillator();
+        const g = this.ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(190 - idx * 40, t);
+        osc.frequency.exponentialRampToValueAtTime(38, t + 0.12);
+        g.gain.setValueAtTime(0.42, t);
+        g.gain.exponentialRampToValueAtTime(0.001, t + 0.14);
+        osc.connect(g);
+        g.connect(this.ctx.destination);
+        osc.start(t);
+        osc.stop(t + 0.15);
+      });
+    } else if (attackerPiece === 'r') {
+      // Castle Siege Tower Battering Ram: massive sub-bass quake
+      const siegeOsc = this.ctx.createOscillator();
+      const siegeGain = this.ctx.createGain();
+      siegeOsc.type = 'sawtooth';
+      const siegeFilter = this.ctx.createBiquadFilter();
+      siegeFilter.type = 'lowpass';
+      siegeFilter.frequency.setValueAtTime(160, now);
+      siegeFilter.frequency.exponentialRampToValueAtTime(32, now + 0.45);
+      siegeGain.gain.setValueAtTime(0.55, now);
+      siegeGain.gain.exponentialRampToValueAtTime(0.001, now + 0.48);
+      siegeOsc.connect(siegeFilter);
+      siegeFilter.connect(siegeGain);
+      siegeGain.connect(this.ctx.destination);
+      siegeOsc.start(now);
+      siegeOsc.stop(now + 0.5);
+    } else if (attackerPiece === 'b') {
+      // Bishop Divine Smite: high celestial whistling resonance
+      const smite = this.ctx.createOscillator();
+      const smiteGain = this.ctx.createGain();
+      smite.type = 'sine';
+      smite.frequency.setValueAtTime(880, now);
+      smite.frequency.exponentialRampToValueAtTime(220, now + 0.35);
+      smiteGain.gain.setValueAtTime(0.28, now);
+      smiteGain.gain.exponentialRampToValueAtTime(0.001, now + 0.38);
+      smite.connect(smiteGain);
+      smiteGain.connect(this.ctx.destination);
+      smite.start(now);
+      smite.stop(now + 0.4);
+    } else if (attackerPiece === 'q') {
+      // Royal Empress Cleave: dual sharp blade clash
+      [640, 960].forEach((freq) => {
+        if (!this.ctx) return;
+        const blade = this.ctx.createOscillator();
+        const bg = this.ctx.createGain();
+        blade.type = 'triangle';
+        blade.frequency.setValueAtTime(freq, now);
+        blade.frequency.exponentialRampToValueAtTime(freq * 0.4, now + 0.22);
+        bg.gain.setValueAtTime(0.35, now);
+        bg.gain.exponentialRampToValueAtTime(0.001, now + 0.24);
+        blade.connect(bg);
+        bg.connect(this.ctx.destination);
+        blade.start(now);
+        blade.stop(now + 0.25);
+      });
+    }
+
+    // 2. Sub-bass table impact thud
     const bass = this.ctx.createOscillator();
     const bassGain = this.ctx.createGain();
     bass.type = 'sine';
@@ -227,7 +294,7 @@ class SoundEngine {
     bass.start(now);
     bass.stop(now + 0.39);
 
-    // 2. Crisp Stone Shatter Clatter (Multi-tap noise bursts)
+    // 3. Crisp Stone Shatter Clatter (Multi-tap noise bursts)
     if (this.noiseBuffer) {
       [0, 0.04, 0.09, 0.15].forEach((delay, idx) => {
         if (!this.ctx || !this.noiseBuffer) return;
@@ -251,6 +318,43 @@ class SoundEngine {
         src.stop(t + 0.075);
       });
     }
+  }
+
+  /**
+   * Royal Fanfare & Divine Chime on Pawn Consecration (Promotion)
+   */
+  public playPromotion() {
+    if (!this.enabled) return;
+    this.initContext();
+    if (!this.ctx) return;
+
+    const now = this.ctx.currentTime;
+    // Ascending arpeggio of radiant golden chimes: C5 -> E5 -> G5 -> C6
+    const arpeggio = [523.25, 659.25, 783.99, 1046.5];
+    arpeggio.forEach((freq, idx) => {
+      if (!this.ctx) return;
+      const start = now + idx * 0.07;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      const filter = this.ctx.createBiquadFilter();
+
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(freq, start);
+
+      filter.type = 'bandpass';
+      filter.frequency.setValueAtTime(freq * 1.5, start);
+      filter.Q.setValueAtTime(4.0, start);
+
+      gain.gain.setValueAtTime(0.001, start);
+      gain.gain.linearRampToValueAtTime(0.24, start + 0.03);
+      gain.gain.exponentialRampToValueAtTime(0.001, start + 0.55);
+
+      osc.connect(filter);
+      filter.connect(gain);
+      gain.connect(this.ctx.destination);
+      osc.start(start);
+      osc.stop(start + 0.6);
+    });
   }
 
   public playBattleStart() {
@@ -353,6 +457,51 @@ class SoundEngine {
       osc.start(start);
       osc.stop(start + 0.98);
     });
+  }
+
+  /**
+   * Adaptive Low-Time Heartbeat Pulsing Tension Sound (< 45s clock)
+   */
+  public playTensionPulse() {
+    if (!this.enabled) return;
+    this.initContext();
+    if (!this.ctx) return;
+
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(58, now);
+    osc.frequency.exponentialRampToValueAtTime(26, now + 0.18);
+
+    gain.gain.setValueAtTime(0.35, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+
+    osc.connect(gain);
+    gain.connect(this.ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.22);
+  }
+
+  /**
+   * Mobile Haptic Feedback (Vibration API)
+   */
+  public triggerHaptic(type: 'light' | 'medium' | 'heavy' | 'warning' = 'light') {
+    if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+      try {
+        if (type === 'light') {
+          navigator.vibrate(12);
+        } else if (type === 'medium') {
+          navigator.vibrate(28);
+        } else if (type === 'heavy') {
+          navigator.vibrate([40, 30, 60]);
+        } else if (type === 'warning') {
+          navigator.vibrate([30, 40, 30, 40, 70]);
+        }
+      } catch {
+        // Ignore unsupported devices / permissions
+      }
+    }
   }
 }
 
