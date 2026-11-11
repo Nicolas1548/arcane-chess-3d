@@ -1,0 +1,218 @@
+rules_version = '2';
+
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// This security rules file assumes the following data structures:
+//
+// Collection: rooms
+// Document ID: {roomId} (4-64 char room code / identifier)
+// Fields:
+//   - roomId: string (required, immutable, 1..64 chars) - Unique room identifier matching document ID
+//   - fen: string (required, 10..120 chars) - Current board Forsyth-Edwards Notation state
+//   - pgn: string (optional, 0..10000 chars) - Portable Game Notation move history
+//   - turn: string (required, enum: ['w', 'b']) - Active player turn color
+//   - whiteId: string (required, immutable, 1..128 chars) - UID of the White player (room creator)
+//   - whiteName: string (required, immutable, 1..40 chars) - Display name of the White player
+//   - blackId: string | null (optional, 1..128 chars when string) - UID of the Black player
+//   - blackName: string | null (optional, 1..40 chars when string) - Display name of the Black player
+//   - status: string (required, enum: ['waiting', 'playing', 'finished']) - Room lifecycle state
+//   - lastMove: map | null (optional, max 11 keys) - Details of the most recent chess move
+//   - winner: string | null (optional, enum: ['w', 'b', 'draw'] when string) - Match outcome
+//   - createdAt: number | timestamp (required, immutable) - Room creation timestamp
+//   - updatedAt: number | timestamp (required) - Last update timestamp
+//
+// Subcollection: rooms/{roomId}/messages
+// Document ID: {messageId}
+// Fields:
+//   - id: string (optional, immutable, 1..64 chars) - Optional client message ID
+//   - senderId: string (required, immutable, 1..128 chars) - UID of message author (must match request.auth.uid)
+//   - senderName: string (required, immutable, 1..40 chars) - Display name of message author
+//   - text: string (required, immutable, 1..300 chars) - Chat message content
+//   - color: string | null (optional, immutable, enum: ['w', 'b', 'spectator']) - Player role/color badge
+//   - createdAt: number | timestamp (required, immutable) - Message creation timestamp
+//
+// ===============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    // Check if the user is authenticated (includes Firebase Anonymous Auth)
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Check if user owns the resource based on a given userId
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Validate required fields exist on the incoming document
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    // Validate that the document contains only the allowed fields
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    // Validate that immutable fields have not been modified on update
+    function areImmutableFieldsUnchanged(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+
+    // Validate string length bounds
+    function validStringLength(field, minLen, maxLen) {
+      return request.resource.data[field] is string &&
+        request.resource.data[field].size() >= minLen &&
+        request.resource.data[field].size() <= maxLen;
+    }
+
+    // Validate optional string (if present and non-null, must be string within length bounds)
+    function isValidOptionalNullableString(data, field, minLen, maxLen) {
+      return !(field in data) ||
+        data[field] == null ||
+        (data[field] is string && data[field].size() >= minLen && data[field].size() <= maxLen);
+    }
+
+    // Validate timestamp or positive epoch milliseconds number
+    function isValidTimeValue(val) {
+      return val is timestamp || (val is number && val > 0);
+    }
+
+    // Validate optional lastMove map structure and field sizes
+    function isValidLastMove(move) {
+      return move == null || (
+        move is map &&
+        move.size() <= 11 &&
+        move.keys().hasOnly(['from', 'to', 'san', 'piece', 'captured', 'promotion', 'color', 'flags', 'lan', 'before', 'after']) &&
+        (!('from' in move) || (move.from is string && move.from.size() >= 2 && move.from.size() <= 10)) &&
+        (!('to' in move) || (move.to is string && move.to.size() >= 2 && move.to.size() <= 10)) &&
+        (!('san' in move) || (move.san is string && move.san.size() >= 1 && move.san.size() <= 20)) &&
+        (!('piece' in move) || (move.piece is string && move.piece.size() >= 1 && move.piece.size() <= 5)) &&
+        (!('captured' in move) || move.captured == null || (move.captured is string && move.captured.size() >= 1 && move.captured.size() <= 5)) &&
+        (!('promotion' in move) || move.promotion == null || (move.promotion is string && move.promotion.size() >= 1 && move.promotion.size() <= 5)) &&
+        (!('color' in move) || move.color in ['w', 'b']) &&
+        (!('flags' in move) || (move.flags is string && move.flags.size() <= 10)) &&
+        (!('lan' in move) || (move.lan is string && move.lan.size() <= 15)) &&
+        (!('before' in move) || (move.before is string && move.before.size() <= 120)) &&
+        (!('after' in move) || (move.after is string && move.after.size() <= 120))
+      );
+    }
+
+    // ===============================================================
+    // Domain Validators (Used in BOTH create and update rules)
+    // ===============================================================
+
+    function isValidRoom(data, roomId) {
+      return hasOnlyAllowedFields([
+          'roomId', 'fen', 'pgn', 'turn',
+          'whiteId', 'whiteName', 'blackId', 'blackName',
+          'status', 'lastMove', 'winner',
+          'createdAt', 'updatedAt'
+        ]) &&
+        hasRequiredFields([
+          'roomId', 'fen', 'turn',
+          'whiteId', 'whiteName', 'status',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.roomId is string &&
+        data.roomId == roomId &&
+        data.roomId.size() >= 1 &&
+        data.roomId.size() <= 64 &&
+        validStringLength('fen', 10, 120) &&
+        isValidOptionalNullableString(data, 'pgn', 0, 10000) &&
+        data.turn in ['w', 'b'] &&
+        validStringLength('whiteId', 1, 128) &&
+        validStringLength('whiteName', 1, 40) &&
+        isValidOptionalNullableString(data, 'blackId', 1, 128) &&
+        isValidOptionalNullableString(data, 'blackName', 1, 40) &&
+        data.status in ['waiting', 'playing', 'finished'] &&
+        (!('lastMove' in data) || isValidLastMove(data.lastMove)) &&
+        (!('winner' in data) || data.winner == null || data.winner in ['w', 'b', 'draw']) &&
+        isValidTimeValue(data.createdAt) &&
+        isValidTimeValue(data.updatedAt);
+    }
+
+    function isValidMessage(data) {
+      return hasOnlyAllowedFields(['id', 'senderId', 'senderName', 'text', 'color', 'createdAt']) &&
+        hasRequiredFields(['senderId', 'senderName', 'text', 'createdAt']) &&
+        isValidOptionalNullableString(data, 'id', 1, 64) &&
+        validStringLength('senderId', 1, 128) &&
+        validStringLength('senderName', 1, 40) &&
+        validStringLength('text', 1, 300) &&
+        (!('color' in data) || data.color == null || data.color in ['w', 'b', 'spectator']) &&
+        isValidTimeValue(data.createdAt);
+    }
+
+    // Check if an authenticated user is joining an open room slot as Black
+    function isJoiningAsBlack() {
+      return (!('blackId' in resource.data) || resource.data.blackId == null) &&
+        request.resource.data.blackId == request.auth.uid &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['blackId', 'blackName', 'status', 'updatedAt']) &&
+        request.resource.data.status in ['waiting', 'playing'];
+    }
+
+    // Check if one of the seated players (White or Black) is updating the game state
+    function isSeatedPlayerUpdatingGame() {
+      return (
+          request.auth.uid == resource.data.whiteId ||
+          ('blackId' in resource.data && resource.data.blackId != null && request.auth.uid == resource.data.blackId)
+        ) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'fen', 'pgn', 'turn', 'status', 'lastMove', 'winner', 'updatedAt'
+        ]);
+    }
+
+    // ===============================================================
+    // Collection Rules
+    // ===============================================================
+
+    match /rooms/{roomId} {
+      // Authenticated users can read room state to join or spectate
+      allow read: if isAuthenticated();
+
+      // Authenticated user can create a room as the White player
+      allow create: if isAuthenticated() &&
+        isValidRoom(request.resource.data, roomId) &&
+        isOwner(request.resource.data.whiteId) &&
+        (!('blackId' in request.resource.data) || request.resource.data.blackId == null || request.resource.data.blackId == request.auth.uid);
+
+      // Room updates must preserve immutable fields, pass full schema validation,
+      // and either seat the Black player in an open slot or update game state by a seated player
+      allow update: if isAuthenticated() &&
+        isValidRoom(request.resource.data, roomId) &&
+        areImmutableFieldsUnchanged(['roomId', 'whiteId', 'whiteName', 'createdAt']) &&
+        (isJoiningAsBlack() || isSeatedPlayerUpdatingGame());
+
+      // Rooms cannot be deleted by clients
+      allow delete: if false;
+
+      // Room chat messages subcollection
+      match /messages/{messageId} {
+        // Authenticated users in the room can read messages
+        allow read: if isAuthenticated();
+
+        // Authenticated users can post messages to an existing room under their own UID
+        allow create: if isAuthenticated() &&
+          exists(/databases/$(database)/documents/rooms/$(roomId)) &&
+          isValidMessage(request.resource.data) &&
+          isOwner(request.resource.data.senderId);
+
+        // Chat messages are immutable once sent
+        allow update, delete: if false;
+      }
+    }
+
+    // Default deny all other paths
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
