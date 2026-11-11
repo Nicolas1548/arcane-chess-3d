@@ -16,6 +16,15 @@ export interface AIDecisionResult {
   openingName?: string;
 }
 
+type TTFlag = 'EXACT' | 'LOWERBOUND' | 'UPPERBOUND';
+
+interface TTEntry {
+  depth: number;
+  score: number;
+  flag: TTFlag;
+  bestMoveUci?: string;
+}
+
 const PIECE_VALUES: Record<string, number> = {
   p: 100,
   n: 320,
@@ -26,80 +35,80 @@ const PIECE_VALUES: Record<string, number> = {
 };
 
 const PAWN_PST = [
-  [0,  0,  0,  0,  0,  0,  0,  0],
+  [0, 0, 0, 0, 0, 0, 0, 0],
   [50, 50, 50, 50, 50, 50, 50, 50],
   [10, 10, 20, 30, 30, 20, 10, 10],
-  [5,  5, 10, 27, 27, 10,  5,  5],
-  [0,  0,  0, 22, 22,  0,  0,  0],
-  [5, -5,-10,  0,  0,-10, -5,  5],
-  [5, 10, 10,-20,-20, 10, 10,  5],
-  [0,  0,  0,  0,  0,  0,  0,  0]
+  [5, 5, 10, 27, 27, 10, 5, 5],
+  [0, 0, 0, 22, 22, 0, 0, 0],
+  [5, -5, -10, 0, 0, -10, -5, 5],
+  [5, 10, 10, -20, -20, 10, 10, 5],
+  [0, 0, 0, 0, 0, 0, 0, 0],
 ];
 
 const KNIGHT_PST = [
-  [-50,-40,-30,-30,-30,-30,-40,-50],
-  [-40,-20,  0,  0,  0,  0,-20,-40],
-  [-30,  0, 12, 16, 16, 12,  0,-30],
-  [-30,  5, 16, 22, 22, 16,  5,-30],
-  [-30,  0, 16, 22, 22, 16,  0,-30],
-  [-30,  5, 12, 16, 16, 12,  5,-30],
-  [-40,-20,  0,  5,  5,  0,-20,-40],
-  [-50,-40,-30,-30,-30,-30,-40,-50]
+  [-50, -40, -30, -30, -30, -30, -40, -50],
+  [-40, -20, 0, 0, 0, 0, -20, -40],
+  [-30, 0, 12, 16, 16, 12, 0, -30],
+  [-30, 5, 16, 22, 22, 16, 5, -30],
+  [-30, 0, 16, 22, 22, 16, 0, -30],
+  [-30, 5, 12, 16, 16, 12, 5, -30],
+  [-40, -20, 0, 5, 5, 0, -20, -40],
+  [-50, -40, -30, -30, -30, -30, -40, -50],
 ];
 
 const BISHOP_PST = [
-  [-20,-10,-10,-10,-10,-10,-10,-20],
-  [-10,  0,  0,  0,  0,  0,  0,-10],
-  [-10,  0,  8, 12, 12,  8,  0,-10],
-  [-10,  6,  8, 12, 12,  8,  6,-10],
-  [-10,  0, 12, 12, 12, 12,  0,-10],
-  [-10, 10, 10, 10, 10, 10, 10,-10],
-  [-10,  6,  0,  0,  0,  0,  6,-10],
-  [-20,-10,-10,-10,-10,-10,-10,-20]
+  [-20, -10, -10, -10, -10, -10, -10, -20],
+  [-10, 0, 0, 0, 0, 0, 0, -10],
+  [-10, 0, 8, 12, 12, 8, 0, -10],
+  [-10, 6, 8, 12, 12, 8, 6, -10],
+  [-10, 0, 12, 12, 12, 12, 0, -10],
+  [-10, 10, 10, 10, 10, 10, 10, -10],
+  [-10, 6, 0, 0, 0, 0, 6, -10],
+  [-20, -10, -10, -10, -10, -10, -10, -20],
 ];
 
 const ROOK_PST = [
-  [0,  0,  0,  0,  0,  0,  0,  0],
-  [8, 14, 14, 14, 14, 14, 14,  8],
-  [-5,  0,  0,  0,  0,  0,  0, -5],
-  [-5,  0,  0,  0,  0,  0,  0, -5],
-  [-5,  0,  0,  0,  0,  0,  0, -5],
-  [-5,  0,  0,  0,  0,  0,  0, -5],
-  [-5,  0,  0,  0,  0,  0,  0, -5],
-  [0,  0,  0,  6,  6,  0,  0,  0]
+  [0, 0, 0, 0, 0, 0, 0, 0],
+  [8, 14, 14, 14, 14, 14, 14, 8],
+  [-5, 0, 0, 0, 0, 0, 0, -5],
+  [-5, 0, 0, 0, 0, 0, 0, -5],
+  [-5, 0, 0, 0, 0, 0, 0, -5],
+  [-5, 0, 0, 0, 0, 0, 0, -5],
+  [-5, 0, 0, 0, 0, 0, 0, -5],
+  [0, 0, 0, 6, 6, 0, 0, 0],
 ];
 
 const QUEEN_PST = [
-  [-20,-10,-10, -5, -5,-10,-10,-20],
-  [-10,  0,  0,  0,  0,  0,  0,-10],
-  [-10,  0,  5,  5,  5,  5,  0,-10],
-  [-5,  0,  5,  5,  5,  5,  0, -5],
-  [0,  0,  5,  5,  5,  5,  0, -5],
-  [-10,  5,  5,  5,  5,  5,  0,-10],
-  [-10,  0,  5,  0,  0,  0,  0,-10],
-  [-20,-10,-10, -5, -5,-10,-10,-20]
+  [-20, -10, -10, -5, -5, -10, -10, -20],
+  [-10, 0, 0, 0, 0, 0, 0, -10],
+  [-10, 0, 5, 5, 5, 5, 0, -10],
+  [-5, 0, 5, 5, 5, 5, 0, -5],
+  [0, 0, 5, 5, 5, 5, 0, -5],
+  [-10, 5, 5, 5, 5, 5, 0, -10],
+  [-10, 0, 5, 0, 0, 0, 0, -10],
+  [-20, -10, -10, -5, -5, -10, -10, -20],
 ];
 
 const KING_MIDGAME_PST = [
-  [-30,-40,-40,-50,-50,-40,-40,-30],
-  [-30,-40,-40,-50,-50,-40,-40,-30],
-  [-30,-40,-40,-50,-50,-40,-40,-30],
-  [-30,-40,-40,-50,-50,-40,-40,-30],
-  [-20,-30,-30,-40,-40,-30,-30,-20],
-  [-10,-20,-20,-20,-20,-20,-20,-10],
-  [20, 20,  0,  0,  0,  0, 20, 20],
-  [20, 30, 10,  0,  0, 10, 30, 20]
+  [-30, -40, -40, -50, -50, -40, -40, -30],
+  [-30, -40, -40, -50, -50, -40, -40, -30],
+  [-30, -40, -40, -50, -50, -40, -40, -30],
+  [-30, -40, -40, -50, -50, -40, -40, -30],
+  [-20, -30, -30, -40, -40, -30, -30, -20],
+  [-10, -20, -20, -20, -20, -20, -20, -10],
+  [20, 20, 0, 0, 0, 0, 20, 20],
+  [20, 30, 10, 0, 0, 10, 30, 20],
 ];
 
 const KING_ENDGAME_PST = [
-  [-50,-40,-30,-20,-20,-30,-40,-50],
-  [-30,-20,-10,  0,  0,-10,-20,-30],
-  [-30,-10, 20, 30, 30, 20,-10,-30],
-  [-30,-10, 30, 40, 40, 30,-10,-30],
-  [-30,-10, 30, 40, 40, 30,-10,-30],
-  [-30,-10, 20, 30, 30, 20,-10,-30],
-  [-30,-30,  0,  0,  0,  0,-30,-30],
-  [-50,-30,-30,-30,-30,-30,-30,-50]
+  [-50, -40, -30, -20, -20, -30, -40, -50],
+  [-30, -20, -10, 0, 0, -10, -20, -30],
+  [-30, -10, 20, 30, 30, 20, -10, -30],
+  [-30, -10, 30, 40, 40, 30, -10, -30],
+  [-30, -10, 30, 40, 40, 30, -10, -30],
+  [-30, -10, 20, 30, 30, 20, -10, -30],
+  [-30, -30, 0, 0, 0, 0, -30, -30],
+  [-50, -30, -30, -30, -30, -30, -30, -50],
 ];
 
 const PST_MAP: Record<string, number[][]> = {
@@ -112,7 +121,29 @@ const PST_MAP: Record<string, number[][]> = {
 };
 
 let nodesCounter = 0;
-const transpositionTable = new Map<string, { depth: number; score: number }>();
+const transpositionTable = new Map<string, TTEntry>();
+
+export function clearTranspositionTable() {
+  transpositionTable.clear();
+}
+
+/**
+ * Standard Perft (Performance Test) function to count exact leaf nodes at a given depth.
+ * Used by automated tests to verify 100% legal move generation accuracy.
+ */
+export function perft(game: Chess, depth: number): number {
+  if (depth === 0) return 1;
+  const moves = game.moves({ verbose: true });
+  if (depth === 1) return moves.length;
+
+  let nodes = 0;
+  for (let i = 0; i < moves.length; i++) {
+    game.move(moves[i]);
+    nodes += perft(game, depth - 1);
+    game.undo();
+  }
+  return nodes;
+}
 
 /**
  * Evaluates board position in centipawns from White's perspective (+ favors White, - favors Black).
@@ -185,7 +216,11 @@ export function evaluateBoard(game: Chess): number {
   return score;
 }
 
-function scoreMoveForOrdering(move: Move): number {
+function scoreMoveForOrdering(move: Move, ttBestMoveUci?: string): number {
+  const uci = `${move.from}${move.to}${move.promotion || ''}`;
+  if (ttBestMoveUci && uci === ttBestMoveUci) {
+    return 100000;
+  }
   let score = 0;
   if (move.captured) {
     const victim = PIECE_VALUES[move.captured] || 100;
@@ -199,7 +234,7 @@ function scoreMoveForOrdering(move: Move): number {
     score += 160;
   }
   if (move.flags.includes('k') || move.flags.includes('q')) {
-    score += 90; // Castling priority
+    score += 90;
   }
   return score;
 }
@@ -229,7 +264,6 @@ function quiescence(
     if (beta > standPat) beta = standPat;
   }
 
-  // Only consider captures and promotions in quiescence
   const tacticalMoves = game
     .moves({ verbose: true })
     .filter((m) => m.captured || m.promotion)
@@ -267,20 +301,35 @@ function minimax(
   nodesCounter++;
 
   if (depth === 0 || game.isGameOver()) {
+    // Prefer faster checkmates by adjusting mate score by remaining depth
+    if (game.isCheckmate()) {
+      return game.turn() === 'w' ? -99999 - depth * 100 : 99999 + depth * 100;
+    }
     return useQuiescence
       ? quiescence(game, alpha, beta, maximizingPlayer)
       : evaluateBoard(game);
   }
 
+  const origAlpha = alpha;
+  const origBeta = beta;
   const fenKey = game.fen();
   const cached = transpositionTable.get(fenKey);
+
   if (cached && cached.depth >= depth) {
-    return cached.score;
+    if (cached.flag === 'EXACT') return cached.score;
+    if (cached.flag === 'LOWERBOUND' && cached.score >= beta) return cached.score;
+    if (cached.flag === 'UPPERBOUND' && cached.score <= alpha) return cached.score;
   }
 
   const moves = game
     .moves({ verbose: true })
-    .sort((a, b) => scoreMoveForOrdering(b) - scoreMoveForOrdering(a));
+    .sort(
+      (a, b) =>
+        scoreMoveForOrdering(b, cached?.bestMoveUci) -
+        scoreMoveForOrdering(a, cached?.bestMoveUci)
+    );
+
+  let bestMoveUci: string | undefined;
 
   if (maximizingPlayer) {
     let maxEval = -Infinity;
@@ -288,12 +337,18 @@ function minimax(
       game.move(move);
       const evaluation = minimax(game, depth - 1, alpha, beta, false, useQuiescence);
       game.undo();
-      maxEval = Math.max(maxEval, evaluation);
+      if (evaluation > maxEval) {
+        maxEval = evaluation;
+        bestMoveUci = `${move.from}${move.to}${move.promotion || ''}`;
+      }
       alpha = Math.max(alpha, evaluation);
       if (beta <= alpha) break;
     }
-    if (transpositionTable.size < 25000) {
-      transpositionTable.set(fenKey, { depth, score: maxEval });
+
+    const flag: TTFlag =
+      maxEval <= origAlpha ? 'UPPERBOUND' : maxEval >= origBeta ? 'LOWERBOUND' : 'EXACT';
+    if (transpositionTable.size < 45000) {
+      transpositionTable.set(fenKey, { depth, score: maxEval, flag, bestMoveUci });
     }
     return maxEval;
   } else {
@@ -302,12 +357,18 @@ function minimax(
       game.move(move);
       const evaluation = minimax(game, depth - 1, alpha, beta, true, useQuiescence);
       game.undo();
-      minEval = Math.min(minEval, evaluation);
+      if (evaluation < minEval) {
+        minEval = evaluation;
+        bestMoveUci = `${move.from}${move.to}${move.promotion || ''}`;
+      }
       beta = Math.min(beta, evaluation);
       if (beta <= alpha) break;
     }
-    if (transpositionTable.size < 25000) {
-      transpositionTable.set(fenKey, { depth, score: minEval });
+
+    const flag: TTFlag =
+      minEval <= origAlpha ? 'UPPERBOUND' : minEval >= origBeta ? 'LOWERBOUND' : 'EXACT';
+    if (transpositionTable.size < 45000) {
+      transpositionTable.set(fenKey, { depth, score: minEval, flag, bestMoveUci });
     }
     return minEval;
   }
@@ -320,6 +381,10 @@ export function computeBestMove(
 ): AIDecisionResult | null {
   const startTime = performance.now();
   nodesCounter = 0;
+
+  if (transpositionTable.size > 35000) {
+    transpositionTable.clear();
+  }
 
   const game = new Chess(fen);
   const legalMoves = game.moves({ verbose: true });
@@ -346,8 +411,8 @@ export function computeBestMove(
     }
   }
 
-  // 2. Difficulty 1 (Escudeiro): Shallow search with slight human-like inaccuracy
-  if (difficulty === 1 && Math.random() < 0.3) {
+  // 2. Difficulty 1 (Escudeiro Aldric): Shallow search with human-like inaccuracy
+  if (difficulty === 1 && Math.random() < 0.28) {
     const randomMove = legalMoves[Math.floor(Math.random() * legalMoves.length)];
     game.move(randomMove);
     return {
@@ -364,43 +429,74 @@ export function computeBestMove(
     };
   }
 
-  const depthMap: Record<AIDifficulty, number> = {
+  // True differentiated search depths across all 4 levels
+  const targetDepthMap: Record<AIDifficulty, number> = {
     1: 1,
     2: 2,
-    3: 3,
-    4: 3, // Depth 3 + Quiescence Tactical Extension (effective depth 6 on captures)
+    3: 3, // Inquisidora Morwen: Depth 3 + Quiescence
+    4: 4, // Grão-Mestre Valerius: Iterative Deepening up to Depth 4 + Quiescence
   };
 
-  const searchDepth = depthMap[difficulty];
+  const maxDepth = targetDepthMap[difficulty];
   const useQuiescence = difficulty >= 3;
   const isWhite = game.turn() === 'w';
-  const orderedMoves = [...legalMoves].sort((a, b) => scoreMoveForOrdering(b) - scoreMoveForOrdering(a));
+  const timeBudgetMs = difficulty === 4 ? 1100 : 600;
 
-  let bestMove: Move = orderedMoves[0];
+  let bestMove: Move = legalMoves[0];
   let bestValue = isWhite ? -Infinity : Infinity;
-  let alpha = -Infinity;
-  let beta = Infinity;
+  let completedDepth = 1;
 
-  for (const move of orderedMoves) {
-    game.move(move);
-    const boardValue = minimax(game, searchDepth - 1, alpha, beta, !isWhite, useQuiescence);
-    game.undo();
+  // Iterative Deepening Loop (1 .. maxDepth) with Principal Variation (PV) move reordering
+  const startIterDepth = difficulty === 4 ? 2 : maxDepth;
+  for (let currentDepth = startIterDepth; currentDepth <= maxDepth; currentDepth++) {
+    const pvUci = `${bestMove.from}${bestMove.to}${bestMove.promotion || ''}`;
+    const orderedMoves = [...legalMoves].sort(
+      (a, b) =>
+        scoreMoveForOrdering(b, currentDepth > startIterDepth ? pvUci : undefined) -
+        scoreMoveForOrdering(a, currentDepth > startIterDepth ? pvUci : undefined)
+    );
 
-    const jitter = difficulty < 3 ? (Math.random() - 0.5) * (3 - difficulty) * 14 : 0;
-    const totalValue = boardValue + jitter;
+    let iterBestMove = orderedMoves[0];
+    let iterBestValue = isWhite ? -Infinity : Infinity;
+    let alpha = -Infinity;
+    let beta = Infinity;
+    let aborted = false;
 
-    if (isWhite) {
-      if (totalValue > bestValue) {
-        bestValue = totalValue;
-        bestMove = move;
+    for (const move of orderedMoves) {
+      if (
+        currentDepth > startIterDepth &&
+        performance.now() - startTime > timeBudgetMs
+      ) {
+        aborted = true;
+        break;
       }
-      alpha = Math.max(alpha, totalValue);
-    } else {
-      if (totalValue < bestValue) {
-        bestValue = totalValue;
-        bestMove = move;
+
+      game.move(move);
+      const boardValue = minimax(game, currentDepth - 1, alpha, beta, !isWhite, useQuiescence);
+      game.undo();
+
+      const jitter = difficulty < 3 ? (Math.random() - 0.5) * (3 - difficulty) * 14 : 0;
+      const totalValue = boardValue + jitter;
+
+      if (isWhite) {
+        if (totalValue > iterBestValue) {
+          iterBestValue = totalValue;
+          iterBestMove = move;
+        }
+        alpha = Math.max(alpha, totalValue);
+      } else {
+        if (totalValue < iterBestValue) {
+          iterBestValue = totalValue;
+          iterBestMove = move;
+        }
+        beta = Math.min(beta, totalValue);
       }
-      beta = Math.min(beta, totalValue);
+    }
+
+    if (!aborted) {
+      bestMove = iterBestMove;
+      bestValue = iterBestValue;
+      completedDepth = currentDepth;
     }
   }
 
@@ -415,7 +511,7 @@ export function computeBestMove(
     evalScore: Math.round(bestValue),
     nodesEvaluated: nodesCounter,
     timeMs: elapsed,
-    depthReached: useQuiescence ? searchDepth + 2 : searchDepth,
+    depthReached: useQuiescence ? completedDepth + 2 : completedDepth,
     isBookMove: false,
     openingName: detected ? `${detected.eco} • ${detected.name}` : undefined,
   };

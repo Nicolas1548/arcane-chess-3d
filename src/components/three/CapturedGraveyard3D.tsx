@@ -92,6 +92,7 @@ export const CapturedGraveyard3D: React.FC<CapturedGraveyard3DProps> = ({
               color="w"
               isSelected={false}
               isKingInCheck={false}
+              interactive={false}
               highQuality={highQuality}
               onSelect={() => {}}
             />
@@ -120,6 +121,7 @@ export const CapturedGraveyard3D: React.FC<CapturedGraveyard3DProps> = ({
               color="b"
               isSelected={false}
               isKingInCheck={false}
+              interactive={false}
               highQuality={highQuality}
               onSelect={() => {}}
             />

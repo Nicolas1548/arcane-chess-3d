@@ -105,6 +105,17 @@ export function lookupOpeningBookMove(
 ): { from: Square; to: Square; promotion?: string; san: string; eco: string; openingName: string } | null {
   if (sanHistory.length > 10) return null;
 
+  // The book is keyed by SAN move sequences from the STANDARD starting position.
+  // Guard against positions loaded from FEN (puzzles, imports) whose history is empty/unrelated:
+  // replay the history from the start and require the resulting board to match `fen`.
+  try {
+    const replay = new Chess();
+    for (const san of sanHistory) replay.move(san);
+    if (replay.fen().split(' ')[0] !== fen.split(' ')[0]) return null;
+  } catch {
+    return null;
+  }
+
   const candidates: { nextSan: string; entry: OpeningEntry }[] = [];
 
   for (const entry of OPENING_BOOK) {

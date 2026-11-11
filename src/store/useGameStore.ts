@@ -45,6 +45,12 @@ export interface AITelemetry {
   isBookMove: boolean;
 }
 
+export interface QueuedMove {
+  from: Square;
+  to: Square;
+  promotion?: PieceSymbol;
+}
+
 interface PendingPromotion {
   from: Square;
   to: Square;
@@ -52,19 +58,98 @@ interface PendingPromotion {
 }
 
 const INITIAL_FEN = new Chess().fen();
+const STORAGE_KEY = 'arcane_chess_state_v1';
+
+interface PersistedStorageState {
+  pgn?: string;
+  fen?: string;
+  mode?: GameMode;
+  aiDifficulty?: AIDifficulty;
+  playerColor?: Color;
+  highQuality?: boolean;
+  animationsEnabled?: boolean;
+  is2DMode?: boolean;
+  autoRotateCamera?: boolean;
+  timeControlMinutes?: number;
+  whiteTime?: number;
+  blackTime?: number;
+  arenaTheme?: ArenaTheme;
+  soundEnabled?: boolean;
+  ambientSoundEnabled?: boolean;
+  playerName?: string;
+  activePuzzleIndex?: number;
+  solvedPuzzleIds?: string[];
+}
+
+function loadPersistedState(): PersistedStorageState {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return {};
+    return JSON.parse(raw) as PersistedStorageState;
+  } catch {
+    return {};
+  }
+}
+
+function savePersistedState(state: Partial<GameState>) {
+  if (typeof window === 'undefined') return;
+  try {
+    const payload: PersistedStorageState = {
+      pgn: state.chess ? state.chess.pgn() : undefined,
+      fen: state.fen,
+      mode: state.mode === 'online' ? 'ai' : state.mode,
+      aiDifficulty: state.aiDifficulty,
+      playerColor: state.playerColor,
+      highQuality: state.highQuality,
+      animationsEnabled: state.animationsEnabled,
+      is2DMode: state.is2DMode,
+      autoRotateCamera: state.autoRotateCamera,
+      timeControlMinutes: state.timeControlMinutes,
+      whiteTime: state.whiteTime,
+      blackTime: state.blackTime,
+      arenaTheme: state.arenaTheme,
+      soundEnabled: state.soundEnabled,
+      ambientSoundEnabled: state.ambientSoundEnabled,
+      playerName: state.playerName,
+      activePuzzleIndex: state.activePuzzleIndex,
+      solvedPuzzleIds: state.solvedPuzzleIds,
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+  } catch {
+    // Ignore storage quota errors
+  }
+}
+
+export function computeDrawReason(game: Chess): string | null {
+  if (game.isStalemate()) return 'Empate por Afogamento (Stalemate)';
+  if (game.isThreefoldRepetition()) return 'Empate por Repetição Tripla';
+  if (game.isInsufficientMaterial()) return 'Empate por Material Insuficiente';
+  if (game.isDraw()) return 'Empate pela Regra dos 50 Lances';
+  return null;
+}
 
 function buildInitialSnapshot(fen = INITIAL_FEN): PlySnapshot {
+  let evalScore = 0;
+  try {
+    evalScore = evaluateBoard(new Chess(fen));
+  } catch {
+    evalScore = 0;
+  }
   return {
     ply: 0,
     fen,
     lastMove: null,
     capturedWhite: [],
     capturedBlack: [],
-    evalScore: 0,
+    evalScore,
   };
 }
 
-function buildTimelineFromChess(chess: Chess): {
+/**
+ * Safely reconstructs full timeline from any starting FEN (standard, imported FEN, or tactical puzzle).
+ */
+export function buildTimelineFromChess(chess: Chess): {
   capturedWhite: PieceSymbol[];
   capturedBlack: PieceSymbol[];
   moveHistory: MoveRecord[];
@@ -78,13 +163,14 @@ function buildTimelineFromChess(chess: Chess): {
   const moveHistory: MoveRecord[] = [];
   const sanList: string[] = [];
 
-  const replayChess = new Chess();
+  const startFen = verboseHistory.length > 0 ? verboseHistory[0].before : chess.fen();
+  const replayChess = new Chess(startFen);
   const plySnapshots: PlySnapshot[] = [buildInitialSnapshot(replayChess.fen())];
 
   verboseHistory.forEach((m, index) => {
     const ply = index + 1;
     sanList.push(m.san);
-    replayChess.move(m);
+    replayChess.move({ from: m.from, to: m.to, promotion: m.promotion });
 
     if (m.captured) {
       if (m.color === 'w') {
@@ -131,7 +217,7 @@ function buildTimelineFromChess(chess: Chess): {
   };
 }
 
-interface GameState {
+export interface GameState {
   chess: Chess;
   fen: string;
   turn: Color;
@@ -142,12 +228,15 @@ interface GameState {
   currentOpening: string | null;
   aiTelemetry: AITelemetry | null;
 
-  // Replay Timeline State
+  // Replay & Undo/Redo Timeline State
   plySnapshots: PlySnapshot[];
-  viewingPly: number | null; // null = live latest state
+  viewingPly: number | null;
+  redoStack: QueuedMove[];
 
   isMainMenuOpen: boolean;
   highQuality: boolean;
+  animationsEnabled: boolean;
+  is2DMode: boolean;
   autoRotateCamera: boolean;
   immersiveMode: boolean;
   timeControlMinutes: number;
@@ -165,6 +254,7 @@ interface GameState {
   inCheck: boolean;
   isCheckmate: boolean;
   isDraw: boolean;
+  drawReason: string | null;
   winner: Color | 'draw' | null;
 
   pendingPromotion: PendingPromotion | null;
@@ -207,13 +297,14 @@ interface GameState {
   endDragPiece: (targetSquare: Square | null) => void;
   addOrToggleTacticalArrow: (from: Square, to: Square) => void;
   clearTacticalAnnotations: () => void;
-  executeMove: (from: Square, to: Square, promotion?: PieceSymbol) => boolean;
+  executeMove: (from: Square, to: Square, promotion?: PieceSymbol, isRedo?: boolean) => boolean;
   completePromotion: (piece: PieceSymbol) => void;
   cancelPromotion: () => void;
   resetGame: () => void;
   startBattleFromMenu: () => void;
   setMainMenuOpen: (open: boolean) => void;
   undoMove: () => void;
+  redoMove: () => void;
   requestHint: () => Promise<void>;
 
   // Replay & PGN Actions
@@ -231,6 +322,8 @@ interface GameState {
   setCameraPreset: (preset: CameraPreset) => void;
   setArenaTheme: (theme: ArenaTheme) => void;
   setHighQuality: (hq: boolean) => void;
+  setAnimationsEnabled: (enabled: boolean) => void;
+  setIs2DMode: (is2D: boolean) => void;
   setAutoRotateCamera: (auto: boolean) => void;
   setImmersiveMode: (immersive: boolean) => void;
   setTimeControlMinutes: (mins: number) => void;
@@ -251,40 +344,80 @@ interface GameState {
   retryPuzzle: () => void;
 }
 
+// Hydrate initial chess instance and timeline from localStorage if available
+const persisted = loadPersistedState();
+const hydratedChess = new Chess();
+if (persisted.mode === 'puzzles') {
+  const pz = TACTICAL_PUZZLES[persisted.activePuzzleIndex ?? 0] || TACTICAL_PUZZLES[0];
+  try {
+    hydratedChess.load(pz.fen);
+  } catch {}
+} else if (persisted.pgn) {
+  try {
+    hydratedChess.loadPgn(persisted.pgn);
+  } catch {
+    if (persisted.fen) {
+      try {
+        hydratedChess.load(persisted.fen);
+      } catch {}
+    }
+  }
+} else if (persisted.fen) {
+  try {
+    hydratedChess.load(persisted.fen);
+  } catch {}
+}
+
+const hydratedTimeline = buildTimelineFromChess(hydratedChess);
+if (persisted.soundEnabled !== undefined) {
+  soundEngine.enabled = persisted.soundEnabled;
+}
+
 export const useGameStore = create<GameState>((set, get) => ({
-  chess: new Chess(),
-  fen: INITIAL_FEN,
-  turn: 'w',
-  mode: 'ai',
-  aiDifficulty: 2,
-  playerColor: 'w',
+  chess: hydratedChess,
+  fen: hydratedChess.fen(),
+  turn: hydratedChess.turn(),
+  mode: persisted.mode ?? 'ai',
+  aiDifficulty: persisted.aiDifficulty ?? 2,
+  playerColor: persisted.playerColor ?? 'w',
   isAIThinking: false,
-  currentOpening: null,
+  currentOpening: hydratedTimeline.currentOpening,
   aiTelemetry: null,
 
-  plySnapshots: [buildInitialSnapshot()],
+  plySnapshots: hydratedTimeline.plySnapshots,
   viewingPly: null,
+  redoStack: [],
 
   isMainMenuOpen: false,
-  highQuality: true,
-  autoRotateCamera: true,
+  highQuality: persisted.highQuality ?? true,
+  animationsEnabled: persisted.animationsEnabled ?? true,
+  is2DMode: persisted.is2DMode ?? false,
+  autoRotateCamera: persisted.autoRotateCamera ?? true,
   immersiveMode: false,
-  timeControlMinutes: 10,
+  timeControlMinutes: persisted.timeControlMinutes ?? 10,
 
   selectedSquare: null,
   legalMoves: [],
-  lastMove: null,
+  lastMove:
+    hydratedTimeline.plySnapshots[hydratedTimeline.plySnapshots.length - 1]?.lastMove ?? null,
   hintMove: null,
 
-  capturedWhite: [],
-  capturedBlack: [],
-  evalScore: 0,
-  moveHistory: [],
+  capturedWhite: hydratedTimeline.capturedWhite,
+  capturedBlack: hydratedTimeline.capturedBlack,
+  evalScore: evaluateBoard(hydratedChess),
+  moveHistory: hydratedTimeline.moveHistory,
 
-  inCheck: false,
-  isCheckmate: false,
-  isDraw: false,
-  winner: null,
+  inCheck: hydratedChess.inCheck(),
+  isCheckmate: hydratedChess.isCheckmate(),
+  isDraw: hydratedChess.isDraw(),
+  drawReason: computeDrawReason(hydratedChess),
+  winner: hydratedChess.isCheckmate()
+    ? hydratedChess.turn() === 'w'
+      ? 'b'
+      : 'w'
+    : hydratedChess.isDraw()
+    ? 'draw'
+    : null,
 
   pendingPromotion: null,
   captureEffects: [],
@@ -295,29 +428,28 @@ export const useGameStore = create<GameState>((set, get) => ({
   tacticalArrows: [],
   tacticalHighlights: [],
 
-  activePuzzleIndex: 0,
+  activePuzzleIndex: persisted.activePuzzleIndex ?? 0,
   puzzleStep: 0,
   puzzleStatus: 'playing',
   puzzleFeedback: null,
-  solvedPuzzleIds: [],
+  solvedPuzzleIds: persisted.solvedPuzzleIds ?? [],
 
-  cameraPreset: 'orbital',
-  arenaTheme: 'citadel',
-  soundEnabled: true,
+  cameraPreset: persisted.is2DMode ? 'top' : 'orbital',
+  arenaTheme: persisted.arenaTheme ?? 'citadel',
+  soundEnabled: persisted.soundEnabled ?? true,
   ambientSoundEnabled: false,
 
-  whiteTime: 600,
-  blackTime: 600,
+  whiteTime: persisted.whiteTime ?? 600,
+  blackTime: persisted.blackTime ?? 600,
 
   onlineRoom: null,
   onlineColor: null,
   chatMessages: [],
-  playerName: 'Lorde Arcano',
+  playerName: persisted.playerName ?? 'Lorde Arcano',
   multiplayerError: null,
 
   selectSquare: (square: Square) => {
     const state = get();
-    // If inspecting historical replay, block board moves until returning to live state
     if (
       state.viewingPly !== null ||
       state.isMainMenuOpen ||
@@ -402,10 +534,19 @@ export const useGameStore = create<GameState>((set, get) => ({
       if (state.turn !== state.onlineColor) return;
     }
 
+    // If a friendly piece is already selected and the user taps an enemy piece that is a legal capture,
+    // let selectSquare handle the capture immediately!
+    if (state.selectedSquare && state.legalMoves.some((m) => m.to === square)) {
+      return;
+    }
+
     const piece = state.chess.get(square);
     if (!piece || piece.color !== state.turn) return;
 
-    soundEngine.playSelect();
+    const alreadySelected = state.selectedSquare === square;
+    if (!alreadySelected) {
+      soundEngine.playSelect();
+    }
     const verboseMoves = state.chess.moves({ square, verbose: true });
     const legalMoves = Array.from(
       new Map(
@@ -484,7 +625,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     set({ tacticalArrows: [], tacticalHighlights: [] });
   },
 
-  executeMove: (from: Square, to: Square, promotion: PieceSymbol = 'q') => {
+  executeMove: (from: Square, to: Square, promotion: PieceSymbol = 'q', isRedo = false) => {
     const state = get();
     const game = state.chess;
 
@@ -493,7 +634,8 @@ export const useGameStore = create<GameState>((set, get) => ({
       if (!moveResult) return false;
 
       const isCheckmate = game.isCheckmate();
-      const isDraw = game.isDraw() || game.isStalemate() || game.isThreefoldRepetition();
+      const drawReason = computeDrawReason(game);
+      const isDraw = Boolean(drawReason);
       const inCheck = game.inCheck();
       const nextTurn = game.turn();
       const winner: Color | 'draw' | null = isCheckmate
@@ -507,14 +649,16 @@ export const useGameStore = create<GameState>((set, get) => ({
 
       if (moveResult.captured) {
         soundEngine.playCapture();
-        const effect: CaptureEffect = {
-          id: 'fx_' + Date.now() + '_' + Math.random(),
-          square: to,
-          color: moveResult.color === 'w' ? 'b' : 'w',
-          piece: moveResult.captured,
-          timestamp: Date.now(),
-        };
-        newEffects = [...state.captureEffects.slice(-4), effect];
+        if (state.animationsEnabled) {
+          const effect: CaptureEffect = {
+            id: 'fx_' + Date.now() + '_' + Math.random(),
+            square: to,
+            color: moveResult.color === 'w' ? 'b' : 'w',
+            piece: moveResult.captured,
+            timestamp: Date.now(),
+          };
+          newEffects = [...state.captureEffects.slice(-4), effect];
+        }
       } else {
         soundEngine.playMove(isCastle);
       }
@@ -535,18 +679,20 @@ export const useGameStore = create<GameState>((set, get) => ({
       } = buildTimelineFromChess(game);
       const evalScore = evaluateBoard(game);
 
-      const nextCameraPreset =
-        state.mode === 'local' && state.autoRotateCamera
-          ? nextTurn === 'w'
-            ? 'white'
-            : 'black'
-          : state.cameraPreset;
+      const nextCameraPreset = state.is2DMode
+        ? 'top'
+        : state.mode === 'local' && state.autoRotateCamera
+        ? nextTurn === 'w'
+          ? 'white'
+          : 'black'
+        : state.cameraPreset;
 
       set({
         fen: game.fen(),
         turn: nextTurn,
         viewingPly: null,
         plySnapshots,
+        redoStack: isRedo ? state.redoStack : [],
         selectedSquare: null,
         legalMoves: [],
         lastMove: { from, to, san: moveResult.san },
@@ -560,13 +706,17 @@ export const useGameStore = create<GameState>((set, get) => ({
         inCheck,
         isCheckmate,
         isDraw,
+        drawReason,
         winner,
         captureEffects: newEffects,
-        lastCaptureTime: moveResult.captured ? Date.now() : state.lastCaptureTime,
+        lastCaptureTime:
+          moveResult.captured && state.animationsEnabled ? Date.now() : state.lastCaptureTime,
         tacticalArrows: [],
         tacticalHighlights: [],
         cameraPreset: nextCameraPreset,
       });
+
+      savePersistedState(get());
 
       if (state.mode === 'online' && state.onlineRoom) {
         multiplayerService.pushMove(state.onlineRoom.roomId, {
@@ -596,8 +746,8 @@ export const useGameStore = create<GameState>((set, get) => ({
                 puzzleFeedback: 'Desafio Concluído com Maestria!',
                 solvedPuzzleIds: solvedIds,
               });
+              savePersistedState(get());
             } else {
-              // Auto-play the opponent's forced reply after a brief pause
               set({
                 puzzleStep: nextStep,
                 puzzleFeedback: 'Lance Brilhante! Continue a sequência...',
@@ -612,7 +762,7 @@ export const useGameStore = create<GameState>((set, get) => ({
                     (reply.promotion as PieceSymbol) || 'q'
                   );
                 }
-              }, 480);
+              }, 420);
             }
           } else if (expected && moveResult.color === puzzle.playerColor) {
             soundEngine.playCheck();
@@ -625,7 +775,13 @@ export const useGameStore = create<GameState>((set, get) => ({
         return true;
       }
 
-      if (state.mode === 'ai' && !isCheckmate && !isDraw && nextTurn !== state.playerColor) {
+      if (
+        state.mode === 'ai' &&
+        !isRedo &&
+        !isCheckmate &&
+        !isDraw &&
+        nextTurn !== state.playerColor
+      ) {
         set({ isAIThinking: true });
         const fenSnapshot = game.fen();
         const diffSnapshot = state.aiDifficulty;
@@ -662,7 +818,7 @@ export const useGameStore = create<GameState>((set, get) => ({
               (aiDecision.promotion as PieceSymbol) || 'q'
             );
           }
-        }, 280);
+        }, 250);
       }
 
       return true;
@@ -692,6 +848,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       turn: 'w',
       plySnapshots: [buildInitialSnapshot(fresh.fen())],
       viewingPly: null,
+      redoStack: [],
       selectedSquare: null,
       legalMoves: [],
       lastMove: null,
@@ -705,12 +862,15 @@ export const useGameStore = create<GameState>((set, get) => ({
       inCheck: false,
       isCheckmate: false,
       isDraw: false,
+      drawReason: null,
       winner: null,
       pendingPromotion: null,
       isAIThinking: false,
       whiteTime: initialSecs,
       blackTime: initialSecs,
     });
+
+    savePersistedState(get());
 
     if (state.mode === 'ai' && state.playerColor === 'b' && !state.isMainMenuOpen) {
       set({ isAIThinking: true });
@@ -731,23 +891,24 @@ export const useGameStore = create<GameState>((set, get) => ({
         if (aiMove) {
           get().executeMove(aiMove.from, aiMove.to, 'q');
         }
-      }, 350);
+      }, 320);
     }
   },
 
   startBattleFromMenu: () => {
     const state = get();
     soundEngine.playBattleStart();
-    const targetCam: CameraPreset =
-      state.mode === 'ai'
-        ? state.playerColor === 'b'
-          ? 'black'
-          : 'orbital'
-        : state.mode === 'local'
-        ? 'white'
-        : state.onlineColor === 'b'
+    const targetCam: CameraPreset = state.is2DMode
+      ? 'top'
+      : state.mode === 'ai'
+      ? state.playerColor === 'b'
         ? 'black'
-        : 'white';
+        : 'orbital'
+      : state.mode === 'local'
+      ? 'white'
+      : state.onlineColor === 'b'
+      ? 'black'
+      : 'white';
 
     set({ isMainMenuOpen: false, cameraPreset: targetCam });
 
@@ -766,12 +927,37 @@ export const useGameStore = create<GameState>((set, get) => ({
     if (state.mode === 'online' || state.isAIThinking) return;
 
     const game = state.chess;
+    const undoneMoves: QueuedMove[] = [];
+
     if (state.mode === 'ai') {
-      game.undo();
-      game.undo();
+      const m1 = game.undo();
+      if (m1) {
+        undoneMoves.push({
+          from: m1.from as Square,
+          to: m1.to as Square,
+          promotion: m1.promotion as PieceSymbol | undefined,
+        });
+      }
+      const m2 = game.undo();
+      if (m2) {
+        undoneMoves.push({
+          from: m2.from as Square,
+          to: m2.to as Square,
+          promotion: m2.promotion as PieceSymbol | undefined,
+        });
+      }
     } else {
-      game.undo();
+      const m1 = game.undo();
+      if (m1) {
+        undoneMoves.push({
+          from: m1.from as Square,
+          to: m1.to as Square,
+          promotion: m1.promotion as PieceSymbol | undefined,
+        });
+      }
     }
+
+    if (undoneMoves.length === 0) return;
 
     const { capturedWhite, capturedBlack, moveHistory, currentOpening, plySnapshots } =
       buildTimelineFromChess(game);
@@ -782,6 +968,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       turn: game.turn(),
       plySnapshots,
       viewingPly: null,
+      redoStack: [...state.redoStack, ...undoneMoves],
       selectedSquare: null,
       legalMoves: [],
       lastMove: plySnapshots[plySnapshots.length - 1]?.lastMove || null,
@@ -794,8 +981,31 @@ export const useGameStore = create<GameState>((set, get) => ({
       inCheck: game.inCheck(),
       isCheckmate: game.isCheckmate(),
       isDraw: game.isDraw(),
+      drawReason: computeDrawReason(game),
       winner: null,
+      puzzleStatus: 'playing',
+      puzzleFeedback: null,
     });
+
+    savePersistedState(get());
+  },
+
+  redoMove: () => {
+    const state = get();
+    if (state.mode === 'online' || state.isAIThinking || state.redoStack.length === 0) return;
+
+    const nextRedoStack = [...state.redoStack];
+    if (state.mode === 'ai' && nextRedoStack.length >= 2) {
+      const playerMove = nextRedoStack.pop()!;
+      const aiReply = nextRedoStack.pop()!;
+      set({ redoStack: nextRedoStack });
+      state.executeMove(playerMove.from, playerMove.to, playerMove.promotion || 'q', true);
+      get().executeMove(aiReply.from, aiReply.to, aiReply.promotion || 'q', true);
+    } else {
+      const nextMove = nextRedoStack.pop()!;
+      set({ redoStack: nextRedoStack });
+      state.executeMove(nextMove.from, nextMove.to, nextMove.promotion || 'q', true);
+    }
   },
 
   requestHint: async () => {
@@ -833,7 +1043,6 @@ export const useGameStore = create<GameState>((set, get) => ({
     }
   },
 
-  // Replay Navigation Actions
   jumpToPly: (ply: number | null) => {
     const state = get();
     const maxPly = state.plySnapshots.length - 1;
@@ -880,8 +1089,16 @@ export const useGameStore = create<GameState>((set, get) => ({
       `[Event "Arcane Gambit 3D"]`,
       `[Site "Salão Medieval 3D"]`,
       `[Date "${new Date().toISOString().split('T')[0].replace(/-/g, '.')}"]`,
-      `[White "${state.mode === 'ai' && state.playerColor === 'b' ? `Oráculo IA (Nv.${state.aiDifficulty})` : 'Ordem da Luz'}"]`,
-      `[Black "${state.mode === 'ai' && state.playerColor === 'w' ? `Oráculo IA (Nv.${state.aiDifficulty})` : 'Legião Obsidiana'}"]`,
+      `[White "${
+        state.mode === 'ai' && state.playerColor === 'b'
+          ? `Oráculo IA (Nv.${state.aiDifficulty})`
+          : 'Ordem da Luz'
+      }"]`,
+      `[Black "${
+        state.mode === 'ai' && state.playerColor === 'w'
+          ? `Oráculo IA (Nv.${state.aiDifficulty})`
+          : 'Legião Obsidiana'
+      }"]`,
       state.currentOpening ? `[Opening "${state.currentOpening}"]` : '',
     ]
       .filter(Boolean)
@@ -897,7 +1114,6 @@ export const useGameStore = create<GameState>((set, get) => ({
 
     const testChess = new Chess();
 
-    // Try loading as PGN first
     try {
       testChess.loadPgn(cleaned);
       if (testChess.history().length > 0) {
@@ -915,6 +1131,7 @@ export const useGameStore = create<GameState>((set, get) => ({
           turn: testChess.turn(),
           plySnapshots,
           viewingPly: null,
+          redoStack: [],
           selectedSquare: null,
           legalMoves: [],
           lastMove: plySnapshots[plySnapshots.length - 1]?.lastMove || null,
@@ -927,16 +1144,17 @@ export const useGameStore = create<GameState>((set, get) => ({
           inCheck: testChess.inCheck(),
           isCheckmate: testChess.isCheckmate(),
           isDraw: testChess.isDraw(),
+          drawReason: computeDrawReason(testChess),
           winner: testChess.isCheckmate() ? (testChess.turn() === 'w' ? 'b' : 'w') : null,
           isMainMenuOpen: false,
         });
+        savePersistedState(get());
         return { ok: true };
       }
     } catch {
       // Fallback to FEN check
     }
 
-    // Try loading as FEN string
     try {
       const fenChess = new Chess(cleaned);
       const snap = buildInitialSnapshot(fenChess.fen());
@@ -947,6 +1165,7 @@ export const useGameStore = create<GameState>((set, get) => ({
         turn: fenChess.turn(),
         plySnapshots: [snap],
         viewingPly: null,
+        redoStack: [],
         selectedSquare: null,
         legalMoves: [],
         lastMove: null,
@@ -959,9 +1178,11 @@ export const useGameStore = create<GameState>((set, get) => ({
         inCheck: fenChess.inCheck(),
         isCheckmate: fenChess.isCheckmate(),
         isDraw: fenChess.isDraw(),
+        drawReason: computeDrawReason(fenChess),
         winner: null,
         isMainMenuOpen: false,
       });
+      savePersistedState(get());
       return { ok: true };
     } catch {
       return { ok: false, error: 'Formato PGN ou FEN inválido. Verifique a notação.' };
@@ -983,30 +1204,56 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   setAIDifficulty: (aiDifficulty: AIDifficulty) => {
     set({ aiDifficulty });
+    savePersistedState(get());
   },
 
   setPlayerColor: (playerColor: Color) => {
-    set({ playerColor, cameraPreset: playerColor === 'b' ? 'black' : 'orbital' });
+    set({
+      playerColor,
+      cameraPreset: get().is2DMode ? 'top' : playerColor === 'b' ? 'black' : 'orbital',
+    });
     get().resetGame();
   },
 
   setCameraPreset: (cameraPreset: CameraPreset) => {
-    set({ cameraPreset });
+    set({ cameraPreset, is2DMode: false });
+    savePersistedState(get());
   },
 
   setArenaTheme: (arenaTheme: ArenaTheme) => {
     set({ arenaTheme });
+    savePersistedState(get());
   },
 
-  setHighQuality: (highQuality: boolean) => set({ highQuality }),
+  setHighQuality: (highQuality: boolean) => {
+    set({ highQuality });
+    savePersistedState(get());
+  },
 
-  setAutoRotateCamera: (autoRotateCamera: boolean) => set({ autoRotateCamera }),
+  setAnimationsEnabled: (animationsEnabled: boolean) => {
+    set({ animationsEnabled });
+    savePersistedState(get());
+  },
+
+  setIs2DMode: (is2DMode: boolean) => {
+    set({
+      is2DMode,
+      cameraPreset: is2DMode ? 'top' : 'orbital',
+    });
+    savePersistedState(get());
+  },
+
+  setAutoRotateCamera: (autoRotateCamera: boolean) => {
+    set({ autoRotateCamera });
+    savePersistedState(get());
+  },
 
   setImmersiveMode: (immersiveMode: boolean) => set({ immersiveMode }),
 
   setTimeControlMinutes: (timeControlMinutes: number) => {
     const secs = timeControlMinutes > 0 ? timeControlMinutes * 60 : 0;
     set({ timeControlMinutes, whiteTime: secs, blackTime: secs });
+    savePersistedState(get());
   },
 
   toggleSound: () => {
@@ -1018,16 +1265,25 @@ export const useGameStore = create<GameState>((set, get) => ({
       soundEngine.toggleAmbient(true);
     }
     set({ soundEnabled: next });
+    savePersistedState(get());
   },
 
   toggleAmbientSound: () => {
     const next = soundEngine.toggleAmbient();
     set({ ambientSoundEnabled: next });
+    savePersistedState(get());
   },
 
   tickTimer: () => {
     const state = get();
-    if (state.isMainMenuOpen || state.timeControlMinutes === 0 || state.viewingPly !== null) return;
+    if (
+      state.isMainMenuOpen ||
+      state.timeControlMinutes === 0 ||
+      state.viewingPly !== null ||
+      state.mode === 'puzzles'
+    ) {
+      return;
+    }
     if (state.isCheckmate || state.isDraw) return;
     if (state.mode === 'online' && (!state.onlineRoom || state.onlineRoom.status !== 'playing')) {
       return;
@@ -1053,7 +1309,10 @@ export const useGameStore = create<GameState>((set, get) => ({
     }
   },
 
-  setPlayerName: (playerName: string) => set({ playerName }),
+  setPlayerName: (playerName: string) => {
+    set({ playerName });
+    savePersistedState(get());
+  },
 
   createOnlineRoom: async () => {
     try {
@@ -1064,7 +1323,7 @@ export const useGameStore = create<GameState>((set, get) => ({
         mode: 'online',
         onlineRoom: room,
         onlineColor: 'w',
-        cameraPreset: 'white',
+        cameraPreset: state.is2DMode ? 'top' : 'white',
         isMainMenuOpen: false,
         multiplayerError: null,
         chatMessages: [],
@@ -1114,6 +1373,7 @@ export const useGameStore = create<GameState>((set, get) => ({
               inCheck: syncedChess.inCheck(),
               isCheckmate: syncedChess.isCheckmate(),
               isDraw: syncedChess.isDraw(),
+              drawReason: computeDrawReason(syncedChess),
               winner: updatedRoom.winner,
               onlineRoom: updatedRoom,
             });
@@ -1156,7 +1416,7 @@ export const useGameStore = create<GameState>((set, get) => ({
         viewingPly: null,
         onlineRoom: room,
         onlineColor: assignedColor,
-        cameraPreset: assignedColor === 'b' ? 'black' : 'white',
+        cameraPreset: state.is2DMode ? 'top' : assignedColor === 'b' ? 'black' : 'white',
         isMainMenuOpen: false,
         capturedWhite,
         capturedBlack,
@@ -1204,6 +1464,7 @@ export const useGameStore = create<GameState>((set, get) => ({
               inCheck: nextChess.inCheck(),
               isCheckmate: nextChess.isCheckmate(),
               isDraw: nextChess.isDraw(),
+              drawReason: computeDrawReason(nextChess),
               winner: updatedRoom.winner,
               onlineRoom: updatedRoom,
             });
@@ -1249,6 +1510,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       playerColor: puzzle.playerColor,
       plySnapshots: [snap],
       viewingPly: null,
+      redoStack: [],
       selectedSquare: null,
       legalMoves: [],
       lastMove: null,
@@ -1261,12 +1523,15 @@ export const useGameStore = create<GameState>((set, get) => ({
       inCheck: puzzleChess.inCheck(),
       isCheckmate: false,
       isDraw: false,
+      drawReason: null,
       winner: null,
       pendingPromotion: null,
       isAIThinking: false,
       tacticalArrows: [],
       tacticalHighlights: [],
     });
+
+    savePersistedState(get());
   },
 
   nextPuzzle: () => {

@@ -1,4 +1,5 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useThree } from '@react-three/fiber';
 import { Text, useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import { Chess, Square } from 'chess.js';
@@ -11,6 +12,7 @@ import { CapturedGraveyard3D } from './CapturedGraveyard3D';
 const GLTF_URL = '/models/ABeautifulGame/ABeautifulGame.gltf';
 const FILES = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
 const RANKS = ['8', '7', '6', '5', '4', '3', '2', '1'];
+const NOOP_RAYCAST = () => null;
 
 /**
  * Renders a 3D tactical arrow on the chessboard surface from `from` square to `to` square
@@ -42,9 +44,9 @@ const TacticalArrow3D: React.FC<{ from: Square; to: Square; color?: string }> = 
   }, [from, to]);
 
   return (
-    <group position={[0, 0.145, 0]}>
+    <group position={[0, 0.175, 0]}>
       {/* Arrow Shaft */}
-      <mesh position={[midX, 0, midZ]} rotation={[0, angle, 0]}>
+      <mesh position={[midX, 0, midZ]} rotation={[0, angle, 0]} raycast={NOOP_RAYCAST}>
         <boxGeometry args={[0.16, 0.028, shaftLen]} />
         <meshStandardMaterial
           color={color}
@@ -55,7 +57,7 @@ const TacticalArrow3D: React.FC<{ from: Square; to: Square; color?: string }> = 
         />
       </mesh>
       {/* Arrow Head */}
-      <mesh position={[headX, 0, headZ]} rotation={[Math.PI / 2, 0, -angle]}>
+      <mesh position={[headX, 0, headZ]} rotation={[Math.PI / 2, 0, -angle]} raycast={NOOP_RAYCAST}>
         <coneGeometry args={[0.28, 0.42, 3]} />
         <meshStandardMaterial
           color={color}
@@ -86,6 +88,8 @@ export const Board3D: React.FC = () => {
     turn,
     arenaTheme,
     highQuality,
+    animationsEnabled,
+    is2DMode,
     draggingSquare,
     dragHoverSquare,
     tacticalArrows,
@@ -97,9 +101,58 @@ export const Board3D: React.FC = () => {
     addOrToggleTacticalArrow,
   } = useGameStore();
 
+  const controls = useThree((s) => s.controls as { enabled?: boolean } | null);
   const [hoveredSquare, setHoveredSquare] = useState<Square | null>(null);
   const dragWorldPosRef = useRef<[number, number] | null>(null);
   const rightClickStartRef = useRef<Square | null>(null);
+  // Pending press on a friendly piece: drag only starts after the pointer travels > DRAG_THRESHOLD_PX.
+  // A plain click therefore only SELECTS the piece (never auto-drops it on a neighbouring square).
+  const pendingDragRef = useRef<{ square: Square; x: number; y: number } | null>(null);
+
+  useEffect(() => {
+    const DRAG_THRESHOLD_PX = 6;
+    const handleMove = (ev: PointerEvent) => {
+      const pending = pendingDragRef.current;
+      if (!pending) return;
+      if (Math.hypot(ev.clientX - pending.x, ev.clientY - pending.y) < DRAG_THRESHOLD_PX) return;
+      pendingDragRef.current = null;
+      const [wx, , wz] = squareToWorld(pending.square, 0);
+      dragWorldPosRef.current = [wx, wz];
+      useGameStore.getState().startDragPiece(pending.square);
+    };
+    const handleUp = () => {
+      pendingDragRef.current = null;
+      if (controls && !useGameStore.getState().draggingSquare) controls.enabled = true;
+    };
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('pointerup', handleUp);
+    window.addEventListener('pointercancel', handleUp);
+    return () => {
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', handleUp);
+      window.removeEventListener('pointercancel', handleUp);
+    };
+  }, [controls]);
+
+  // Global pointerup safety net so a drag never gets stuck if released outside the board
+  useEffect(() => {
+    if (!draggingSquare) return;
+    const handleGlobalPointerUp = () => {
+      dragWorldPosRef.current = null;
+      document.body.style.cursor = 'auto';
+      if (controls) controls.enabled = true;
+      const state = useGameStore.getState();
+      if (state.draggingSquare) {
+        state.endDragPiece(state.dragHoverSquare);
+      }
+    };
+    window.addEventListener('pointerup', handleGlobalPointerUp);
+    window.addEventListener('pointercancel', handleGlobalPointerUp);
+    return () => {
+      window.removeEventListener('pointerup', handleGlobalPointerUp);
+      window.removeEventListener('pointercancel', handleGlobalPointerUp);
+    };
+  }, [draggingSquare, controls]);
 
   const gltf = useGLTF(GLTF_URL) as unknown as {
     nodes: Record<string, THREE.Mesh>;
@@ -217,25 +270,29 @@ export const Board3D: React.FC = () => {
       {/* Precision Engraved Gold Algebraic Coordinates */}
       {FILES.map((fileLabel, c) => {
         const x = (c - 3.5) * SQUARE_SIZE;
+        const coordZ = is2DMode ? 4.90 : 5.02;
+        const fontSize = is2DMode ? 0.30 : 0.22;
         return (
           <React.Fragment key={`file-${fileLabel}`}>
             <Text
-              position={[x, 0.125, 5.02]}
+              position={[x, 0.125, coordZ]}
               rotation={[-Math.PI / 2, 0, 0]}
-              fontSize={0.22}
-              color="#e5c158"
+              fontSize={fontSize}
+              color="#fbbf24"
               anchorX="center"
               anchorY="middle"
+              raycast={NOOP_RAYCAST}
             >
               {fileLabel}
             </Text>
             <Text
-              position={[x, 0.125, -5.02]}
-              rotation={[-Math.PI / 2, 0, Math.PI]}
-              fontSize={0.22}
-              color="#e5c158"
+              position={[x, 0.125, -coordZ]}
+              rotation={[-Math.PI / 2, 0, is2DMode ? 0 : Math.PI]}
+              fontSize={fontSize}
+              color="#fbbf24"
               anchorX="center"
               anchorY="middle"
+              raycast={NOOP_RAYCAST}
             >
               {fileLabel}
             </Text>
@@ -245,25 +302,29 @@ export const Board3D: React.FC = () => {
 
       {RANKS.map((rankLabel, r) => {
         const z = (r - 3.5) * SQUARE_SIZE;
+        const coordX = is2DMode ? 4.90 : 5.02;
+        const fontSize = is2DMode ? 0.30 : 0.22;
         return (
           <React.Fragment key={`rank-${rankLabel}`}>
             <Text
-              position={[-5.02, 0.125, z]}
+              position={[-coordX, 0.125, z]}
               rotation={[-Math.PI / 2, 0, 0]}
-              fontSize={0.22}
-              color="#e5c158"
+              fontSize={fontSize}
+              color="#fbbf24"
               anchorX="center"
               anchorY="middle"
+              raycast={NOOP_RAYCAST}
             >
               {rankLabel}
             </Text>
             <Text
-              position={[5.02, 0.125, z]}
-              rotation={[-Math.PI / 2, 0, Math.PI]}
-              fontSize={0.22}
-              color="#e5c158"
+              position={[coordX, 0.125, z]}
+              rotation={[-Math.PI / 2, 0, is2DMode ? 0 : Math.PI]}
+              fontSize={fontSize}
+              color="#fbbf24"
               anchorX="center"
               anchorY="middle"
+              raycast={NOOP_RAYCAST}
             >
               {rankLabel}
             </Text>
@@ -274,7 +335,7 @@ export const Board3D: React.FC = () => {
       {/* Interactive 3D Drag-and-Drop Raycast Plane (Active while dragging a piece) */}
       {draggingSquare && (
         <mesh
-          position={[0, 0.14, 0]}
+          position={[0, 0.18, 0]}
           rotation={[-Math.PI / 2, 0, 0]}
           onPointerMove={(e) => {
             e.stopPropagation();
@@ -287,7 +348,14 @@ export const Board3D: React.FC = () => {
             const sq = worldToSquare(e.point.x, e.point.z);
             dragWorldPosRef.current = null;
             document.body.style.cursor = 'auto';
+            if (controls) controls.enabled = true;
             endDragPiece(sq);
+          }}
+          onPointerCancel={() => {
+            dragWorldPosRef.current = null;
+            document.body.style.cursor = 'auto';
+            if (controls) controls.enabled = true;
+            endDragPiece(null);
           }}
         >
           <planeGeometry args={[28, 28]} />
@@ -333,14 +401,13 @@ export const Board3D: React.FC = () => {
               {/* Square Sensor & Luminous Overlay */}
               <mesh
                 rotation={[-Math.PI / 2, 0, 0]}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  selectSquare(square);
-                }}
                 onPointerDown={(e) => {
                   if (e.button === 2) {
                     e.stopPropagation();
                     rightClickStartRef.current = square;
+                  } else if (e.button === 0 || e.pointerType === 'touch') {
+                    e.stopPropagation();
+                    selectSquare(square);
                   }
                 }}
                 onPointerUp={(e) => {
@@ -375,8 +442,12 @@ export const Board3D: React.FC = () => {
 
               {/* Right-Click Tactical Square Ring */}
               {isTacticalHighlight && (
-                <mesh position={[0, 0.008, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-                  <ringGeometry args={[0.42, 0.51, 36]} />
+                <mesh
+                  position={[0, is2DMode ? 0.042 : 0.008, 0]}
+                  rotation={[-Math.PI / 2, 0, 0]}
+                  raycast={NOOP_RAYCAST}
+                >
+                  <ringGeometry args={[0.45, 0.53, 36]} />
                   <meshBasicMaterial color="#10b981" transparent opacity={0.88} />
                 </mesh>
               )}
@@ -384,7 +455,7 @@ export const Board3D: React.FC = () => {
               {/* Polished Gold Marker for Legal Moves */}
               {legalInfo && !legalInfo.isCapture && (
                 <group position={[0, 0.006, 0]}>
-                  <mesh rotation={[-Math.PI / 2, 0, 0]}>
+                  <mesh rotation={[-Math.PI / 2, 0, 0]} raycast={NOOP_RAYCAST}>
                     <ringGeometry args={[0.13, 0.19, 32]} />
                     <meshStandardMaterial
                       color="#eab308"
@@ -394,7 +465,7 @@ export const Board3D: React.FC = () => {
                       roughness={0.15}
                     />
                   </mesh>
-                  <mesh rotation={[-Math.PI / 2, 0, 0]}>
+                  <mesh rotation={[-Math.PI / 2, 0, 0]} raycast={NOOP_RAYCAST}>
                     <circleGeometry args={[0.075, 24]} />
                     <meshStandardMaterial
                       color="#fef08a"
@@ -407,13 +478,13 @@ export const Board3D: React.FC = () => {
 
               {/* Crimson Target Ring for Legal Captures */}
               {legalInfo && legalInfo.isCapture && (
-                <group position={[0, 0.006, 0]}>
-                  <mesh rotation={[-Math.PI / 2, 0, 0]}>
-                    <ringGeometry args={[0.42, 0.5, 36]} />
+                <group position={[0, is2DMode ? 0.042 : 0.006, 0]}>
+                  <mesh rotation={[-Math.PI / 2, 0, 0]} raycast={NOOP_RAYCAST}>
+                    <ringGeometry args={is2DMode ? [0.46, 0.54, 48] : [0.42, 0.5, 36]} />
                     <meshStandardMaterial
                       color="#ef4444"
                       emissive="#dc2626"
-                      emissiveIntensity={0.7}
+                      emissiveIntensity={0.75}
                     />
                   </mesh>
                 </group>
@@ -439,6 +510,7 @@ export const Board3D: React.FC = () => {
         const isKingCheckmated =
           viewingPly === null && isCheckmate && p.type === 'k' && p.color === turn;
         const isPieceDragging = viewingPly === null && draggingSquare === p.square;
+        const isCaptureTarget = viewingPly === null && Boolean(legalMap.get(p.square)?.isCapture);
 
         return (
           <ChessPiece3D
@@ -450,13 +522,40 @@ export const Board3D: React.FC = () => {
             isKingInCheck={isKingInCheck}
             isKingCheckmated={isKingCheckmated}
             isDragging={isPieceDragging}
+            isAnyDragging={draggingSquare !== null}
+            isLegalCaptureTarget={isCaptureTarget}
+            animationsEnabled={animationsEnabled}
+            is2DMode={is2DMode}
             dragWorldPos={dragWorldPosRef}
             highQuality={highQuality}
             onSelect={selectSquare}
-            onDragStart={(sq) => {
-              const [wx, , wz] = squareToWorld(sq, 0);
-              dragWorldPosRef.current = [wx, wz];
-              startDragPiece(sq);
+            onDragStart={(sq, e) => {
+              // If a piece is already selected and the user clicked a legal move square on the floor
+              // behind this tall 3D piece, execute that legal move immediately instead of re-selecting!
+              if (selectedSquare && Math.abs(e.ray.direction.y) > 0.01) {
+                const t = (0.122 - e.ray.origin.y) / e.ray.direction.y;
+                if (t > 0) {
+                  const floorSq = worldToSquare(
+                    e.ray.origin.x + t * e.ray.direction.x,
+                    e.ray.origin.z + t * e.ray.direction.z
+                  );
+                  if (floorSq && legalMap.has(floorSq)) {
+                    selectSquare(floorSq);
+                    return;
+                  }
+                }
+              }
+              if (controls) controls.enabled = false;
+              // Click = select immediately; drag only begins after the pointer moves (see pendingDragRef).
+              selectSquare(sq);
+              const st = useGameStore.getState();
+              if (st.selectedSquare === sq) {
+                pendingDragRef.current = {
+                  square: sq,
+                  x: e.nativeEvent.clientX,
+                  y: e.nativeEvent.clientY,
+                };
+              }
             }}
           />
         );

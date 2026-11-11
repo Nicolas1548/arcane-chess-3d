@@ -4,6 +4,7 @@ import {
   Sparkles,
   RotateCcw,
   Undo2,
+  Redo2,
   Volume2,
   VolumeX,
   Music,
@@ -83,8 +84,11 @@ export const HUD: React.FC = () => {
     currentOpening,
     plySnapshots,
     viewingPly,
+    redoStack,
     isMainMenuOpen,
     highQuality,
+    animationsEnabled,
+    is2DMode,
     autoRotateCamera,
     timeControlMinutes,
     capturedWhite,
@@ -94,6 +98,7 @@ export const HUD: React.FC = () => {
     inCheck,
     isCheckmate,
     isDraw,
+    drawReason,
     winner,
     pendingPromotion,
     hintMove,
@@ -119,6 +124,7 @@ export const HUD: React.FC = () => {
     resetGame,
     setMainMenuOpen,
     undoMove,
+    redoMove,
     requestHint,
     clearTacticalAnnotations,
     jumpToPly,
@@ -134,6 +140,8 @@ export const HUD: React.FC = () => {
     setCameraPreset,
     setArenaTheme,
     setHighQuality,
+    setAnimationsEnabled,
+    setIs2DMode,
     setAutoRotateCamera,
     setTimeControlMinutes,
     toggleSound,
@@ -190,6 +198,12 @@ export const HUD: React.FC = () => {
       } else if (e.key.toLowerCase() === 'z' && !isMainMenuOpen) {
         e.preventDefault();
         undoMove();
+      } else if (e.key.toLowerCase() === 'y' && !isMainMenuOpen) {
+        e.preventDefault();
+        redoMove();
+      } else if (e.key === '2' && !isMainMenuOpen) {
+        e.preventDefault();
+        setIs2DMode(!is2DMode);
       } else if (e.key.toLowerCase() === 'c' && !isMainMenuOpen) {
         e.preventDefault();
         const order: CameraPreset[] = ['orbital', 'white', 'black', 'top'];
@@ -210,6 +224,9 @@ export const HUD: React.FC = () => {
     stepReplayNext,
     requestHint,
     undoMove,
+    redoMove,
+    is2DMode,
+    setIs2DMode,
     cameraPreset,
     setCameraPreset,
     toggleSound,
@@ -546,6 +563,18 @@ export const HUD: React.FC = () => {
 
         {/* 3. TOP-RIGHT PILL: Camera, History Drawer Toggle, Ambient Music, Audio & Fullscreen */}
         <div className="pointer-events-auto flex items-center gap-1 bg-stone-950/85 backdrop-blur-md border border-amber-700/35 rounded-full p-1 shadow-xl">
+          <button
+            onClick={() => setIs2DMode(!is2DMode)}
+            title="Alternar Modo 2D Plano / 3D Esculpido (Atalho: 2)"
+            className={`px-2.5 py-1 rounded-full text-[11px] font-bold transition ${
+              is2DMode
+                ? 'bg-amber-500 text-stone-950'
+                : 'text-amber-300 hover:bg-stone-800'
+            }`}
+          >
+            {is2DMode ? '2D' : '3D'}
+          </button>
+
           <button
             onClick={cycleCameraPreset}
             title="Alternar Ângulo de Câmera (Atalho: C)"
@@ -920,6 +949,21 @@ export const HUD: React.FC = () => {
                 <span>Voltar</span>
               </button>
 
+              {redoStack.length > 0 && (
+                <>
+                  <div className="h-3.5 w-[1px] bg-stone-800" />
+                  <button
+                    onClick={redoMove}
+                    disabled={mode === 'online'}
+                    title="Refazer Lance (Atalho: Y)"
+                    className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs text-amber-200 hover:bg-stone-800 transition disabled:opacity-40"
+                  >
+                    <Redo2 className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Refazer</span>
+                  </button>
+                </>
+              )}
+
               {hasAnnotations && (
                 <>
                   <div className="h-3.5 w-[1px] bg-stone-800" />
@@ -1218,27 +1262,37 @@ export const HUD: React.FC = () => {
               </div>
 
               <div>
-                <label className="text-[11px] text-stone-400 block mb-1">Qualidade 3D</label>
-                <div className="grid grid-cols-2 gap-1">
+                <label className="text-[11px] text-stone-400 block mb-1">Qualidade & Visão</label>
+                <div className="grid grid-cols-3 gap-1">
                   <button
-                    onClick={() => setHighQuality(true)}
+                    onClick={() => setHighQuality(!highQuality)}
                     className={`py-1.5 rounded-lg text-[11px] ${
                       highQuality
                         ? 'bg-amber-600/30 text-amber-200 border border-amber-600/50 font-semibold'
                         : 'bg-stone-900 text-stone-400'
                     }`}
                   >
-                    Ultra PBR
+                    {highQuality ? 'Ultra' : 'Leve'}
                   </button>
                   <button
-                    onClick={() => setHighQuality(false)}
+                    onClick={() => setAnimationsEnabled(!animationsEnabled)}
                     className={`py-1.5 rounded-lg text-[11px] ${
-                      !highQuality
+                      animationsEnabled
                         ? 'bg-amber-600/30 text-amber-200 border border-amber-600/50 font-semibold'
                         : 'bg-stone-900 text-stone-400'
                     }`}
                   >
-                    Leve
+                    {animationsEnabled ? 'Animado' : 'Rápido'}
+                  </button>
+                  <button
+                    onClick={() => setIs2DMode(!is2DMode)}
+                    className={`py-1.5 rounded-lg text-[11px] ${
+                      is2DMode
+                        ? 'bg-amber-600/30 text-amber-200 border border-amber-600/50 font-semibold'
+                        : 'bg-stone-900 text-stone-400'
+                    }`}
+                  >
+                    {is2DMode ? 'Visão 2D' : 'Visão 3D'}
                   </button>
                 </div>
               </div>
@@ -1398,7 +1452,9 @@ export const HUD: React.FC = () => {
                   : 'Partida Empatada!'}
               </h2>
               <p className="text-xs text-amber-300/90 mt-1">
-                {isCheckmate ? 'Xeque-Mate no Tabuleiro Real' : 'Empate Técnico'}
+                {isCheckmate
+                  ? 'Xeque-Mate no Tabuleiro Real'
+                  : drawReason || 'Empate Técnico'}
               </p>
             </div>
 

@@ -59,12 +59,15 @@ class MultiplayerService {
   private unsubscribeChat: (() => void) | null = null;
 
   constructor() {
-    const savedId = sessionStorage.getItem('arcane_player_uid');
+    const hasSession = typeof sessionStorage !== 'undefined';
+    const savedId = hasSession ? sessionStorage.getItem('arcane_player_uid') : null;
     if (savedId) {
       this.localPlayerId = savedId;
     } else {
       this.localPlayerId = 'player_' + Math.random().toString(36).substring(2, 10);
-      sessionStorage.setItem('arcane_player_uid', this.localPlayerId);
+      if (hasSession) {
+        sessionStorage.setItem('arcane_player_uid', this.localPlayerId);
+      }
     }
 
     if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
