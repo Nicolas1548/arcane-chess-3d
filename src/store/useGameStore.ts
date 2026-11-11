@@ -627,7 +627,18 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   executeMove: (from: Square, to: Square, promotion: PieceSymbol = 'q', isRedo = false) => {
     const state = get();
+    if (
+      state.mode === 'online' &&
+      (!state.onlineRoom ||
+        state.onlineRoom.status !== 'playing' ||
+        state.turn !== state.onlineColor)
+    ) {
+      return false;
+    }
+
     const game = state.chess;
+    const previousFen = game.fen();
+    const previousPgn = game.pgn();
 
     try {
       const moveResult = game.move({ from, to, promotion });
@@ -719,13 +730,59 @@ export const useGameStore = create<GameState>((set, get) => ({
       savePersistedState(get());
 
       if (state.mode === 'online' && state.onlineRoom) {
-        multiplayerService.pushMove(state.onlineRoom.roomId, {
+        const attemptedFen = game.fen();
+        void multiplayerService.pushMove(state.onlineRoom.roomId, {
           fen: game.fen(),
           pgn: game.pgn(),
           turn: nextTurn,
           lastMove: { from, to, captured: moveResult.captured, san: moveResult.san },
           status: isCheckmate || isDraw ? 'finished' : 'playing',
           winner,
+        }).catch((err: unknown) => {
+          const current = get();
+          if (current.mode !== 'online' || current.fen !== attemptedFen) return;
+
+          const restoredChess = new Chess();
+          try {
+            if (previousPgn) {
+              restoredChess.loadPgn(previousPgn);
+            } else {
+              restoredChess.load(previousFen);
+            }
+          } catch {
+            restoredChess.load(previousFen);
+          }
+
+          const restoredTimeline = buildTimelineFromChess(restoredChess);
+          set({
+            chess: restoredChess,
+            fen: restoredChess.fen(),
+            turn: restoredChess.turn(),
+            plySnapshots: restoredTimeline.plySnapshots,
+            viewingPly: null,
+            selectedSquare: null,
+            legalMoves: [],
+            lastMove: restoredTimeline.plySnapshots[restoredTimeline.plySnapshots.length - 1]?.lastMove ?? null,
+            capturedWhite: restoredTimeline.capturedWhite,
+            capturedBlack: restoredTimeline.capturedBlack,
+            moveHistory: restoredTimeline.moveHistory,
+            currentOpening: restoredTimeline.currentOpening,
+            evalScore: evaluateBoard(restoredChess),
+            inCheck: restoredChess.inCheck(),
+            isCheckmate: restoredChess.isCheckmate(),
+            isDraw: restoredChess.isDraw(),
+            drawReason: computeDrawReason(restoredChess),
+            winner: restoredChess.isCheckmate()
+              ? restoredChess.turn() === 'w'
+                ? 'b'
+                : 'w'
+              : restoredChess.isDraw()
+                ? 'draw'
+                : null,
+            multiplayerError: err instanceof Error
+              ? err.message
+              : 'Não foi possível sincronizar a jogada.',
+          });
         });
       }
 
